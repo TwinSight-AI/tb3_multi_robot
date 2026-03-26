@@ -27,7 +27,7 @@ from launch.actions import (
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from multi_robot_scripts.utils import generate_rviz_config
+from multi_robot_scripts.utils import generate_rviz_config, create_namespaced_params
 
 def generate_launch_description():
     # ───── Set up paths and environment ────────────────────────────────────────
@@ -73,7 +73,6 @@ def generate_launch_description():
 
     use_sim_time = LaunchConfiguration('use_sim_time')
     map_path = LaunchConfiguration('map')
-    params_path = LaunchConfiguration('params_file')
 
     # Per-robot bringup
     for robot in robots:
@@ -82,7 +81,12 @@ def generate_launch_description():
 
         rviz_config = generate_rviz_config(robot_name, rviz_template_path)
 
-        ld.add_action(LogInfo(msg=['[Launch] Using param file: ', params_path]))
+        # Replace <robot_namespace> placeholders in the params file so that
+        # TF frame IDs (which are NOT affected by ROS namespaces) get the
+        # correct robot-specific prefix.
+        namespaced_params = create_namespaced_params(robot_name, param_file_path)
+
+        ld.add_action(LogInfo(msg=['[Launch] Using namespaced param file: ', namespaced_params]))
 
         nav2_launch = IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
@@ -95,12 +99,15 @@ def generate_launch_description():
             launch_arguments={
                 'map': map_path,
                 'use_sim_time': use_sim_time,
-                'params_file': params_path,
+                'params_file': namespaced_params,
                 'use_namespace': 'true',
                 'namespace': robot_name
             }.items()
         )
 
+        # RViz must subscribe to /<namespace>/tf (where Nav2 + RSP + bridge
+        # all publish), not the global /tf. The remapping redirects RViz's
+        # internal /tf subscription to the namespace-scoped topic.
         rviz_node = Node(
             package='rviz2',
             executable='rviz2',
@@ -109,8 +116,8 @@ def generate_launch_description():
             arguments=['-d', rviz_config],
             parameters=[{'use_sim_time': use_sim_time, 'log_level': 'warn'}],
             remappings=[
-                ('/tf', f'tf'),
-                ('/tf_static', f'tf_static')
+                ('/tf', 'tf'),
+                ('/tf_static', 'tf_static')
             ],
             output='screen'
         )

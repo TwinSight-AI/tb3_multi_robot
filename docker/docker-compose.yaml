@@ -1,0 +1,55 @@
+services:
+  tb3-world:
+    build:
+      context: ../
+      dockerfile: docker/Dockerfile
+    image: tb3_multi_robot:latest
+    container_name: tb3-world
+    user: "${UID:-1000}:${GID:-1000}"
+    ipc: host
+    environment:
+      - DISPLAY=${DISPLAY}
+      - ROS_DOMAIN_ID=0
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /dev/dri:/dev/dri
+      - ../:/robot_ws
+    networks:
+      - ros2_net
+    command: ros2 launch tb3_multi_robot tb3_world.launch.py
+
+  tb3-nav2:
+    image: tb3_multi_robot:latest
+    container_name: tb3-nav2
+    user: "${UID:-1000}:${GID:-1000}"
+    ipc: host
+    depends_on:
+      tb3-world:
+        condition: service_started
+    environment:
+      - DISPLAY=${DISPLAY}
+      - ROS_DOMAIN_ID=0
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /dev/dri:/dev/dri
+      - ../:/robot_ws
+    networks:
+      - ros2_net
+    command: ros2 launch tb3_multi_robot tb3_nav2.launch.py
+
+  tb3-init-poses:
+    image: tb3_multi_robot:latest
+    container_name: tb3-init-poses
+    user: "${UID:-1000}:${GID:-1000}"
+    depends_on:
+      tb3-nav2:
+        condition: service_started
+    environment:
+      - ROS_DOMAIN_ID=0
+    networks:
+      - ros2_net
+    command: /set_initial_poses.sh
+
+networks:
+  ros2_net:
+    driver: bridge

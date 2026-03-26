@@ -3,7 +3,7 @@ FROM osrf/ros:jazzy-desktop-full
 
 # Environment setup
 ENV DEBIAN_FRONTEND=noninteractive
-ENV ROS_DISTRO=jazzy
+ENV QT_X11_NO_MITSHM=1
 
 # Install basic build dependencies and tools
 RUN apt-get update && apt-get install -y \
@@ -35,10 +35,9 @@ WORKDIR /opt/ros2_ws
 RUN mkdir -p src && chmod -R a+rwx /opt/ros2_ws
 
 # Clone your repository into src
-RUN git clone https://github.com/arshadlab/tb3_multi_robot.git src/tb3_multi_robot -b master
-
+COPY . src/tb3_multi_robot
 # Install dependencies using rosdep
-RUN rosdep install --from-paths src --ignore-src -r -y
+RUN apt-get update && rosdep install --from-paths src --ignore-src -r -y
 
 # Source ROS environment before build
 RUN /bin/bash -c "source /opt/ros/${ROS_DISTRO}/setup.bash && colcon build --symlink-install"
@@ -46,13 +45,18 @@ RUN /bin/bash -c "source /opt/ros/${ROS_DISTRO}/setup.bash && colcon build --sym
 # Make sure workspace is readable/executable by all users
 RUN chmod -R a+rX /opt/ros2_ws
 
-# Default shell setup when container starts
-RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> ~/.bashrc
-RUN echo "source /opt/ros2_ws/install/setup.bash" >> ~/.bashrc
+# Create workspace volume mount point
+RUN mkdir -p /robot_ws && chmod -R a+rwx /robot_ws
+VOLUME /robot_ws
 
-# Copy entrypoint script and make it executable
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+# Default shell setup when container starts
+RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> ~/.bashrc && \
+    echo "source /opt/ros2_ws/install/setup.bash" >> ~/.bashrc
+
+# Copy entrypoint and init scripts
+COPY docker/entrypoint.sh /entrypoint.sh
+COPY docker/set_initial_poses.sh /set_initial_poses.sh
+RUN chmod +x /entrypoint.sh /set_initial_poses.sh
 
 # Use it as entrypoint
 ENTRYPOINT ["/entrypoint.sh"]

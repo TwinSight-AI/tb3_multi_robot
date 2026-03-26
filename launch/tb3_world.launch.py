@@ -26,7 +26,7 @@ from launch.actions import (
     DeclareLaunchArgument,
 )
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 from multi_robot_scripts.utils import load_sdf_with_namespace, create_namespaced_bridge_yaml
@@ -63,8 +63,9 @@ def generate_launch_description():
     robots = [r for r in config['robots'] if r.get('enabled', True)]
     tb3_model = os.environ.get('TURTLEBOT3_MODEL', 'burger')
     model_dir = f'turtlebot3_{tb3_model}'
+    # Remap RSP's /tf → tf so it publishes to /<namespace>/tf (not global /tf).
+    # Nav2 with use_namespace gives each robot its own TF tree on /<ns>/tf.
     remappings = [("/tf", "tf"), ("/tf_static", "tf_static")]
-    frame_prefix = LaunchConfiguration('frame_prefix', default='')
     urdf_file_name = 'turtlebot3_' + tb3_model + '.urdf'
     urdf_path = os.path.join(
         tb3_multi_dir,
@@ -90,7 +91,7 @@ def generate_launch_description():
             parameters=[{
                 'use_sim_time': use_sim_time,
                 'robot_description': robot_desc,
-                'frame_prefix': PythonExpression(["'", frame_prefix, "/'"])
+                'frame_prefix': ''
             }])
 
         spawner_node = Node(
@@ -113,6 +114,7 @@ def generate_launch_description():
         bridge_node = Node(
             package='ros_gz_bridge',
             executable='parameter_bridge',
+            name=f'{namespace}_bridge',
             arguments=['--ros-args', '-p', f'config_file:={namespaced_bridge}'],
             output='screen',
         )
