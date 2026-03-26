@@ -395,3 +395,9 @@ Such remapping is also necessary in other components (e.g., Nav2) that instantia
 # 📎 Note on Included Files
 
 Some of configuration and model files (e.g., from turtlebot3 and nav2) have been directly copied into this repository. These were modified to better suit the multi-robot simulation and to ensure long-term consistency and reproducibility—even if the original upstream repositories evolve or change in the future. All original credit for these files remains with their respective authors and maintainers.
+
+# Run on custom Docker Pipeline (at root)
+
+'''
+cd docker && docker-compose up --build
+'''
