@@ -324,15 +324,16 @@ A Dockerfile is provided to simplify the setup and execution of multi-robot simu
 
 ### 🛠️ Build Docker image
 
-Clone the repository and build the Docker image:
+The image also builds the `robot_adapter` package (used by `tb3_world.launch.py` for the per-robot adapter node), so it must be cloned as a sibling of `tb3_multi_robot` in the same parent directory before building:
 
 ```
+$ mkdir -p ws/src && cd ws/src
 $ git clone  https://github.com/arshadlab/tb3_multi_robot.git -b jazzy
-$ cd docker
-$ docker build -t tb3_multi_robot:jazzy .
+$ git clone  https://github.com/TwinSight-AI/robot_adapter.git
+$ docker build -t tb3_multi_robot:jazzy -f tb3_multi_robot/docker/Dockerfile .
 ```
 
-This will build container and also clone and build the repo in /opt/ros2_ws.
+This will build the container and also copy and build both repos in /opt/ros2_ws.
 
 ### 🚀 Launch robots in Gazebo
 
@@ -469,8 +470,40 @@ Such remapping is also necessary in other components (e.g., Nav2) that instantia
 
 Some of configuration and model files (e.g., from turtlebot3 and nav2) have been directly copied into this repository. These were modified to better suit the multi-robot simulation and to ensure long-term consistency and reproducibility—even if the original upstream repositories evolve or change in the future. All original credit for these files remains with their respective authors and maintainers.
 
-# Run on custom Docker Pipeline (at root)
+# 🐳 Docker Compose Pipeline
 
-'''
+`docker/docker-compose.yaml` runs the full multi-robot stack as two containers built from the same image:
+
+- **tb3-world** — launches `tb3_world.launch.py` (Gazebo + per-robot robot_state_publisher, spawner, ros_gz_bridge, and the `robot_adapter` node).
+- **tb3-nav2** — launches `tb3_nav2.launch.py` (per-robot Nav2 bringup + RViz), started after `tb3-world`.
+
+Both containers run the exact same launch files used outside Docker, so the robot list, namespacing, and adapter wiring all come from [`config/robots.yaml`](config/robots.yaml) — enable/disable robots there and both containers pick it up automatically, with no per-robot changes needed in the compose file itself. AMCL initial poses are seeded automatically from the same file (see "Set Initial Pose" above), so no separate pose-publishing container is required.
+
+To run:
+
+```
 cd docker && docker-compose up --build
-'''
+```
+
+### Inspecting topics
+
+With the stack running, list the ROS topics available from either container:
+
+```
+docker exec tb3-world bash -c "source /opt/ros/jazzy/setup.bash && source /opt/ros2_ws/install/setup.bash && ros2 topic list"
+```
+
+### Per-robot TwinSight credentials (UUIDs)
+
+Each robot's `robot_adapter` node needs its own `robot_id` (UUID) and `robot_secret` to register as a distinct entity in the TwinSight platform. `tb3_world.launch.py` reads these per robot from `<ROBOT_NAME>_ROBOT_ID` / `<ROBOT_NAME>_ROBOT_SECRET` environment variables (e.g. `TB1_ROBOT_ID`, `TB3_ROBOT_SECRET`), which `docker-compose.yaml` passes through for `tb1`–`tb4`.
+
+Set them in a `docker/.env` file (or export in the shell) before `docker compose up`:
+
+```
+TB1_ROBOT_ID=<tb1 uuid>
+TB1_ROBOT_SECRET=<tb1 secret>
+TB3_ROBOT_ID=<tb3 uuid>
+TB3_ROBOT_SECRET=<tb3 secret>
+```
+
+Any robot left unset falls back to the adapter's built-in dummy UUID (fine for local testing, but all such robots will share the same identity against the platform).

@@ -130,12 +130,24 @@ def generate_launch_description():
                 output='screen',
             )
 
-        robot_adapter_node = None
+        # TwinSight platform robot_id/robot_secret are per-robot credentials,
+        # so they're sourced from <ROBOT_NAME>_ROBOT_ID / _ROBOT_SECRET env
+        # vars (see docker-compose.yaml) rather than robots.yaml. Falls back
+        # to the adapter's built-in dummy UUID when unset.
+        env_prefix = robot_name.upper()
+        robot_id = os.environ.get(f'{env_prefix}_ROBOT_ID', '')
+        robot_secret = os.environ.get(f'{env_prefix}_ROBOT_SECRET', '')
+
         robot_adapter_node = Node(
             package='robot_adapter',
             executable='adapter_node',
             namespace=namespace,
-            output='screen'
+            output='screen',
+            parameters=[{
+                'robot_id': robot_id,
+                'robot_secret': robot_secret,
+                'use_dummy_uuid': not bool(robot_id),
+            }]
         )
 
         # Add robot-related nodes

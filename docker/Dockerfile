@@ -34,8 +34,12 @@ RUN rosdep update
 WORKDIR /opt/ros2_ws
 RUN mkdir -p src && chmod -R a+rwx /opt/ros2_ws
 
-# Clone your repository into src
-COPY . src/tb3_multi_robot
+# Copy workspace packages into src.
+# Build context is the workspace src/ directory (see docker-compose.yaml),
+# so robot_adapter (a sibling package tb3_world.launch.py depends on for its
+# per-robot adapter node) is copied and built alongside tb3_multi_robot.
+COPY tb3_multi_robot src/tb3_multi_robot
+COPY robot_adapter src/robot_adapter
 # Install dependencies using rosdep
 RUN apt-get update && rosdep install --from-paths src --ignore-src -r -y
 
@@ -53,10 +57,9 @@ VOLUME /robot_ws
 RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> ~/.bashrc && \
     echo "source /opt/ros2_ws/install/setup.bash" >> ~/.bashrc
 
-# Copy entrypoint and init scripts
-COPY docker/entrypoint.sh /entrypoint.sh
-COPY docker/set_initial_poses.sh /set_initial_poses.sh
-RUN chmod +x /entrypoint.sh /set_initial_poses.sh
+# Copy entrypoint script
+COPY tb3_multi_robot/docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 # Use it as entrypoint
 ENTRYPOINT ["/entrypoint.sh"]
