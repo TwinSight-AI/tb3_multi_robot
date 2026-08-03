@@ -130,10 +130,20 @@ def generate_launch_description():
                 output='screen',
             )
 
+        robot_adapter_node = None
+        robot_adapter_node = Node(
+            package='robot_adapter',
+            executable='adapter_node',
+            namespace=namespace,
+            output='screen'
+        )
+
         # Add robot-related nodes
         ld.add_action(robot_state_publisher)
         ld.add_action(spawner_node)
         ld.add_action(bridge_node)
+        ld.add_action(robot_adapter_node)
+
         if image_bridge:
             ld.add_action(image_bridge)
 
