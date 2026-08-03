@@ -61,6 +61,8 @@ def generate_launch_description():
         config = yaml.safe_load(f)
 
     robots = [r for r in config['robots'] if r.get('enabled', True)]
+    # Shared across all robots' adapters (one TwinSight backend per deployment).
+    api_base_url = os.environ.get('TWINSIGHT_API_BASE_URL', 'http://localhost:8001')
     tb3_model = os.environ.get('TURTLEBOT3_MODEL', 'burger')
     model_dir = f'turtlebot3_{tb3_model}'
     # Remap RSP's /tf → tf so it publishes to /<namespace>/tf (not global /tf).
@@ -134,7 +136,7 @@ def generate_launch_description():
         # so they're sourced from <ROBOT_NAME>_ROBOT_ID / _ROBOT_SECRET env
         # vars (see docker-compose.yaml) rather than robots.yaml. Falls back
         # to the adapter's built-in dummy UUID when unset.
-        env_prefix = robot_name.upper()
+        env_prefix = namespace.upper()
         robot_id = os.environ.get(f'{env_prefix}_ROBOT_ID', '')
         robot_secret = os.environ.get(f'{env_prefix}_ROBOT_SECRET', '')
 
@@ -144,9 +146,17 @@ def generate_launch_description():
             namespace=namespace,
             output='screen',
             parameters=[{
+                'api_base_url': api_base_url,
                 'robot_id': robot_id,
                 'robot_secret': robot_secret,
                 'use_dummy_uuid': not bool(robot_id),
+                # Relative (no leading slash) so they resolve under this
+                # node's namespace instead of the adapter's absolute
+                # defaults (/odom, /battery_state, /imu), which every
+                # robot's adapter would otherwise subscribe to identically.
+                'odom_topic': 'odom',
+                'battery_topic': 'battery_state',
+                'imu_topic': 'imu',
             }]
         )
 

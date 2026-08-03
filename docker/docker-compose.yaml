@@ -10,11 +10,20 @@ services:
     user: "${UID:-1000}:${GID:-1000}"
     ipc: host
     gpus: all
+    extra_hosts:
+      # Lets TWINSIGHT_API_BASE_URL reach a backend published on the host
+      # (e.g. a sibling docker-compose stack's container) via its host port,
+      # since "localhost" inside this container is this container itself.
+      - "host.docker.internal:host-gateway"
     environment:
       - DISPLAY=${DISPLAY}
       - ROS_DOMAIN_ID=0
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
+      # TwinSight backend URL, shared by every robot's adapter. Use
+      # http://host.docker.internal:<port> to reach a backend published on
+      # the host (see extra_hosts above).
+      - TWINSIGHT_API_BASE_URL=${TWINSIGHT_API_BASE_URL:-http://localhost:8001}
       # Per-robot TwinSight platform credentials (UUID + secret), read by
       # tb3_world.launch.py for each robot's adapter node. Set these in a
       # docker/.env file or the shell environment before `docker compose up`;

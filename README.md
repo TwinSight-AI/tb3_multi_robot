@@ -493,17 +493,18 @@ With the stack running, list the ROS topics available from either container:
 docker exec tb3-world bash -c "source /opt/ros/jazzy/setup.bash && source /opt/ros2_ws/install/setup.bash && ros2 topic list"
 ```
 
-### Per-robot TwinSight credentials (UUIDs)
+### TwinSight backend URL and per-robot credentials (UUIDs)
 
-Each robot's `robot_adapter` node needs its own `robot_id` (UUID) and `robot_secret` to register as a distinct entity in the TwinSight platform. `tb3_world.launch.py` reads these per robot from `<ROBOT_NAME>_ROBOT_ID` / `<ROBOT_NAME>_ROBOT_SECRET` environment variables (e.g. `TB1_ROBOT_ID`, `TB3_ROBOT_SECRET`), which `docker-compose.yaml` passes through for `tb1`–`tb4`.
+Each robot's `robot_adapter` node needs its own `robot_id` (UUID) and `robot_secret` to register as a distinct entity in the TwinSight platform. `tb3_world.launch.py` reads these per robot from `<ROBOT_NAME>_ROBOT_ID` / `<ROBOT_NAME>_ROBOT_SECRET` environment variables (e.g. `TB1_ROBOT_ID`, `TB3_ROBOT_SECRET`), which `docker-compose.yaml` passes through for `tb1`–`tb4`. The API endpoint itself is shared by all robots and configured via `TWINSIGHT_API_BASE_URL`.
 
-Set them in a `docker/.env` file (or export in the shell) before `docker compose up`:
+Set these in a `docker/.env` file (or export in the shell) before `docker compose up`:
 
 ```
+TWINSIGHT_API_BASE_URL=<your TwinSight backend URL>
 TB1_ROBOT_ID=<tb1 uuid>
 TB1_ROBOT_SECRET=<tb1 secret>
 TB3_ROBOT_ID=<tb3 uuid>
 TB3_ROBOT_SECRET=<tb3 secret>
 ```
 
-Any robot left unset falls back to the adapter's built-in dummy UUID (fine for local testing, but all such robots will share the same identity against the platform).
+`TWINSIGHT_API_BASE_URL` defaults to `http://localhost:8001`, which is **not** reachable from inside the `tb3-world` container unless a backend is actually listening there on the host/network — leaving it unset (with no backend running) will show up as `Connection refused` errors in the adapter's logs. Any robot left with no `_ROBOT_ID` falls back to the adapter's built-in dummy UUID (fine for local testing, but all such robots will share the same identity against the platform).
