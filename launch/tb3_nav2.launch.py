@@ -83,8 +83,16 @@ def generate_launch_description():
 
         # Replace <robot_namespace> placeholders in the params file so that
         # TF frame IDs (which are NOT affected by ROS namespaces) get the
-        # correct robot-specific prefix.
-        namespaced_params = create_namespaced_params(robot_name, param_file_path)
+        # correct robot-specific prefix. Also seed AMCL's initial pose with
+        # this robot's Gazebo spawn pose so it starts localized.
+        namespaced_params = create_namespaced_params(
+            robot_name,
+            param_file_path,
+            x_pose=float(robot.get('x_pose', 0.0)),
+            y_pose=float(robot.get('y_pose', 0.0)),
+            z_pose=float(robot.get('z_pose', 0.0)),
+            yaw=float(robot.get('yaw', 0.0)),
+        )
 
         ld.add_action(LogInfo(msg=['[Launch] Using namespaced param file: ', namespaced_params]))
 

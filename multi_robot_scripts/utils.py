@@ -15,6 +15,7 @@
 # Authors: Arshad Mehmood
 
 import os
+import re
 import yaml
 import tempfile
 
@@ -145,18 +146,45 @@ def generate_rviz_config(robot_name, base_config_path):
     return output_config_path
 
 
-def create_namespaced_params(robot_name, base_params_path):
+def create_namespaced_params(robot_name, base_params_path, x_pose=0.0, y_pose=0.0, z_pose=0.0, yaw=0.0):
     """Create a temporary Nav2 params file with <robot_namespace> placeholders stripped.
 
     The base params file uses <robot_namespace>/ as a marker on both topic names
     and frame IDs. Since Nav2 with use_namespace handles namespacing automatically
     (topics via ROS namespace, frames via per-namespace TF tree), we simply strip
     the marker so all names are bare (e.g. scan, odom, base_link).
+
+    Also sets AMCL's set_initial_pose/initial_pose to the robot's Gazebo spawn
+    pose, so each robot starts localized without a manual "2D Pose Estimate"
+    click in RViz.
     """
     with open(base_params_path, 'r') as f:
         params_text = f.read()
 
     params_text = params_text.replace('<robot_namespace>/', '')
+
+    params_text = re.sub(
+        r'set_initial_pose:\s*false',
+        'set_initial_pose: true',
+        params_text,
+        count=1,
+    )
+    params_text = re.sub(
+        r'(initial_pose:\s*\n)'
+        r'(\s*)x:\s*[\-0-9.eE]+\s*\n'
+        r'\s*y:\s*[\-0-9.eE]+\s*\n'
+        r'\s*z:\s*[\-0-9.eE]+\s*\n'
+        r'\s*yaw:\s*[\-0-9.eE]+',
+        lambda m: (
+            f'{m.group(1)}'
+            f'{m.group(2)}x: {x_pose}\n'
+            f'{m.group(2)}y: {y_pose}\n'
+            f'{m.group(2)}z: {z_pose}\n'
+            f'{m.group(2)}yaw: {yaw}'
+        ),
+        params_text,
+        count=1,
+    )
 
     temp_dir = tempfile.gettempdir()
     output_path = os.path.join(temp_dir, f'{robot_name}_nav2_params.yaml')

@@ -125,6 +125,10 @@ This will launch Nav2 nodes for all enabled robots using their respective namesp
 The RViz2 panel title has been updated to include the corresponding robot name, making it easier to match each RViz instance with its respective robot in the Gazebo simulation.
 
 ### 🧭 Set Initial Pose
+`tb3_nav2.launch.py` automatically seeds each robot's AMCL initial pose (`set_initial_pose` / `initial_pose` in the namespaced Nav2 params file) with the same `x_pose`, `y_pose`, `z_pose`, and `yaw` values defined for that robot in [`config/robots.yaml`](config/robots.yaml). Since these are the same values used to spawn the robot in Gazebo, each robot starts already localized — no manual 2D Pose Estimate click is required.
+
+If a robot's actual position ever diverges from its configured spawn pose (e.g. it was moved, or localization needs to be reset), the pose can still be corrected manually.
+
 With RViz running, the robot’s initial position and orientation can be set using the 2D Pose Estimate button, aligned to its simulated placement and heading.
 
 <img width="2180" height="1676" alt="image" src="https://github.com/user-attachments/assets/6a0c1bb0-32b1-4cf2-ad74-2da1ffba88e7" />
@@ -245,6 +249,75 @@ rqt --ros-args -r __ns:=/tb1 -r /tf:=tf -r /tf_static:=tf_static
 
 <img width="1630" height="1572" alt="image" src="https://github.com/user-attachments/assets/a8f4221b-705e-4b52-ab04-03916a60de08" />
 
+
+## 🌐 Local Deploy: Simulation + TwinSight Robot Adapter
+
+To run the multi-robot simulation alongside [robot_adapter](https://github.com/TwinSight-AI/robot_adapter) (bridges each robot's telemetry to the TwinSight platform), build both packages in the same workspace.
+
+### 1. Create the workspace and clone both repositories
+
+```
+$ mkdir -p multirobot_ws/src
+$ cd multirobot_ws/src
+
+$ git clone https://github.com/arshadlab/tb3_multi_robot.git -b master
+$ git clone https://github.com/TwinSight-AI/robot_adapter.git
+```
+
+### 2. Source ROS 2 and install dependencies
+
+```
+$ cd multirobot_ws
+$ source /opt/ros/jazzy/setup.bash
+$ rosdep install --from-paths src -r -y
+```
+
+### 3. Build the workspace
+
+```
+$ colcon build --symlink-install
+$ source install/setup.bash
+```
+
+### 4. Launch the simulation and Nav2 stack
+
+In separate terminals (each sourcing `install/setup.bash` first):
+
+```
+# Terminal 1 - Gazebo + robots
+$ ros2 launch tb3_multi_robot tb3_world.launch.py
+
+# Terminal 2 - Nav2 stack
+$ ros2 launch tb3_multi_robot tb3_nav2.launch.py
+```
+
+### 5. Launch a robot_adapter instance per enabled robot
+
+Each enabled robot in `config/robots.yaml` (e.g. `tb1`, `tb3`) needs its own `robot_adapter` instance, pointed at that robot's namespaced topics and its TwinSight `robot_id`/`robot_secret`:
+
+```
+# Terminal 3 - adapter for tb1
+$ ros2 launch robot_adapter adapter.launch.py \
+    api_base_url:=http://localhost:8001 \
+    robot_id:=<tb1_robot_id> \
+    robot_secret:=<tb1_robot_secret> \
+    odom_topic:=/tb1/odom \
+    battery_topic:=/tb1/battery_state \
+    imu_topic:=/tb1/imu 
+
+# Terminal 4 - adapter for tb3
+$ ros2 launch robot_adapter adapter.launch.py \
+    api_base_url:=http://localhost:8001 \
+    robot_id:=<tb3_robot_id> \
+    robot_secret:=<tb3_robot_secret> \
+    odom_topic:=/tb3/odom \
+    battery_topic:=/tb3/battery_state \
+    imu_topic:=/tb3/imu 
+```
+
+`enable_streaming`/`enable_teleop` are disabled above because the burger model used in this simulation has no camera bridge. If you switch a robot to `waffle`/`waffle_pi` (which do bridge a camera), set them back to `true` and point `image_topic`/`image_topic2` at that robot's namespaced camera topics (e.g. `/tb1/camera/image_raw`).
+
+Replace `<tbX_robot_id>` / `<tbX_robot_secret>` with the credentials issued for that robot in the TwinSight platform, and `api_base_url` with wherever your TwinSight backend is reachable.
 
 ## 🐳 Running via Dockers
 A Dockerfile is provided to simplify the setup and execution of multi-robot simulation using ROS 2 Jazzy. This enables running the project even on systems other than Ubuntu 24.04 (e.g. Ubuntu 22.04) without requiring ROS installation on the host. The Docker image includes all necessary dependencies preconfigured.
