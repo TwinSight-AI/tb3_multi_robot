@@ -10,7 +10,7 @@ robots:
     y_pose: "0.5"
     z_pose: 0.01
     yaw: 0.0
-    enabled: false
+    enabled: true
   - name: tb3
     x_pose: "1.5"
     y_pose: "-0.5"
@@ -22,4 +22,4 @@ robots:
     y_pose: "0.5"
     z_pose: 0.01
     yaw: 0.0
-    enabled: false
+    enabled: true
