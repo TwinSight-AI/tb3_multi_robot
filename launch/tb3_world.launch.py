@@ -140,6 +140,7 @@ def generate_launch_description():
         robot_id = os.environ.get(f'{env_prefix}_ROBOT_ID', '')
         robot_secret = os.environ.get(f'{env_prefix}_ROBOT_SECRET', '')
 
+
         robot_adapter_node = Node(
             package='robot_adapter',
             executable='adapter_node',
@@ -149,7 +150,7 @@ def generate_launch_description():
                 'api_base_url': api_base_url,
                 'robot_id': robot_id,
                 'robot_secret': robot_secret,
-                'use_dummy_uuid': not bool(robot_id),
+                'use_dummy_uuid': False,
                 # Relative (no leading slash) so they resolve under this
                 # node's namespace instead of the adapter's absolute
                 # defaults (/odom, /battery_state, /imu), which every

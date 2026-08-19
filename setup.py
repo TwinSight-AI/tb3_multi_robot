@@ -7,7 +7,10 @@ package_name = 'tb3_multi_robot'
 setup(
     name=package_name,
     version='1.0.0',
-    packages=find_packages(where='.', include=['multi_robot_scripts', 'multi_robot_scripts.*']),
+    packages=find_packages(where='.', include=[
+        'multi_robot_scripts', 'multi_robot_scripts.*',
+        'tb3_multi_robot', 'tb3_multi_robot.*',
+    ]),
     package_dir={'': '.'},
     data_files=[
         (f'share/{package_name}', ['package.xml']),
@@ -34,6 +37,7 @@ setup(
     entry_points={
         'console_scripts': [
             'turtlebot3_drive = multi_robot_scripts.turtlebot3_drive:main',
+            'mock_battery = tb3_multi_robot.mock_battery:main',
         ],
     },
 )

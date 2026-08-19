@@ -130,6 +130,20 @@ def generate_launch_description():
             output='screen'
         )
 
+        mock_battery = Node(
+            package='tb3_multi_robot',
+            executable='mock_battery',
+            namespace=namespace,
+            # Relative (no leading slash) so it resolves under this node's
+            # namespace instead of the mock's absolute default (/battery_state),
+            # which every robot's mock_battery would otherwise publish to
+            # identically — the same collision odom/battery/imu topics avoid
+            # in tb3_world.launch.py's robot_adapter_node.
+            parameters=[{'battery_topic': 'battery_state'}],
+            output='screen',
+        )
+
+        ld.add_action(mock_battery)
         ld.add_action(nav2_launch)
         ld.add_action(rviz_node)
 

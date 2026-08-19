@@ -15,27 +15,18 @@ services:
       # (e.g. a sibling docker-compose stack's container) via its host port,
       # since "localhost" inside this container is this container itself.
       - "host.docker.internal:host-gateway"
+    env_file:
+      # Per-robot TwinSight platform credentials (UUID + secret) and the
+      # backend URL, read by tb3_world.launch.py for each robot's adapter
+      # node. Loaded explicitly so it applies regardless of the directory
+      # `docker compose` is invoked from; any var left unset here falls back
+      # to the adapter's built-in dummy UUID.
+      - .env
     environment:
       - DISPLAY=${DISPLAY}
       - ROS_DOMAIN_ID=0
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
-      # TwinSight backend URL, shared by every robot's adapter. Use
-      # http://host.docker.internal:<port> to reach a backend published on
-      # the host (see extra_hosts above).
-      - TWINSIGHT_API_BASE_URL=${TWINSIGHT_API_BASE_URL:-http://localhost:8001}
-      # Per-robot TwinSight platform credentials (UUID + secret), read by
-      # tb3_world.launch.py for each robot's adapter node. Set these in a
-      # docker/.env file or the shell environment before `docker compose up`;
-      # any left unset fall back to the adapter's built-in dummy UUID.
-      - TB1_ROBOT_ID=${TB1_ROBOT_ID:-}
-      - TB1_ROBOT_SECRET=${TB1_ROBOT_SECRET:-}
-      - TB2_ROBOT_ID=${TB2_ROBOT_ID:-}
-      - TB2_ROBOT_SECRET=${TB2_ROBOT_SECRET:-}
-      - TB3_ROBOT_ID=${TB3_ROBOT_ID:-}
-      - TB3_ROBOT_SECRET=${TB3_ROBOT_SECRET:-}
-      - TB4_ROBOT_ID=${TB4_ROBOT_ID:-}
-      - TB4_ROBOT_SECRET=${TB4_ROBOT_SECRET:-}
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - /dev/dri:/dev/dri
