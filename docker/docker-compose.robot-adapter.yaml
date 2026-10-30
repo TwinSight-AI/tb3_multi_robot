@@ -1,0 +1,26 @@
+# Optional override: run the simulation with the TwinSight robot_adapter.
+#
+# Requires the robot_adapter repository cloned next to this one:
+#   <ws>/src/tb3_multi_robot
+#   <ws>/src/robot_adapter
+# and a docker/.env file with TWINSIGHT_API_BASE_URL and <NAME>_ROBOT_ID /
+# <NAME>_ROBOT_SECRET per robot (read by tb3_world.launch.py).
+#
+# Usage, from this docker/ folder:
+#   docker compose -f docker-compose.yaml -f docker-compose.robot-adapter.yaml up --build
+services:
+  tb3-world:
+    build:
+      # Replaces the Dockerfile's placeholder "robot_adapter" stage with the
+      # real sources, so robot_adapter is built into the image.
+      # Needs Docker Compose 2.17 or later.
+      additional_contexts:
+        robot_adapter: ../../robot_adapter
+    env_file:
+      - .env
+    extra_hosts:
+      # Lets TWINSIGHT_API_BASE_URL reach a backend published on the host
+      # via http://host.docker.internal:<port> ("localhost" inside this
+      # container is the container itself).
+      - "host.docker.internal:host-gateway"
+    command: ros2 launch tb3_multi_robot tb3_world.launch.py use_robot_adapter:=true

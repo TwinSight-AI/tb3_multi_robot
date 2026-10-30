@@ -1,3 +1,16 @@
+# syntax=docker/dockerfile:1
+
+# ---------------------------------------------------------------------------
+# Optional TwinSight robot_adapter sources.
+# By default this stage only contains a placeholder (with COLCON_IGNORE), so
+# the image builds from this repository alone. To build robot_adapter into
+# the image, override this stage with a named build context:
+#   docker build --build-context robot_adapter=<path to robot_adapter> ...
+# docker/docker-compose.robot-adapter.yaml does this for Docker Compose.
+# ---------------------------------------------------------------------------
+FROM scratch AS robot_adapter
+COPY docker/robot_adapter_placeholder/ /
+
 # Base image with ROS 2 Jazzy Desktop
 FROM osrf/ros:jazzy-desktop-full
 
@@ -35,11 +48,12 @@ WORKDIR /opt/ros2_ws
 RUN mkdir -p src && chmod -R a+rwx /opt/ros2_ws
 
 # Copy workspace packages into src.
-# Build context is the workspace src/ directory (see docker-compose.yaml),
-# so robot_adapter (a sibling package tb3_world.launch.py depends on for its
-# per-robot adapter node) is copied and built alongside tb3_multi_robot.
-COPY tb3_multi_robot src/tb3_multi_robot
-COPY robot_adapter src/robot_adapter
+# Build context is this repository's root (see docker-compose.yaml).
+# robot_adapter is optional: without a robot_adapter build context only the
+# placeholder above is copied and colcon skips it.
+COPY . src/tb3_multi_robot
+COPY --from=robot_adapter / src/robot_adapter/
+
 # Install dependencies using rosdep
 RUN apt-get update && rosdep install --from-paths src --ignore-src -r -y
 
@@ -58,7 +72,7 @@ RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> ~/.bashrc && \
     echo "source /opt/ros2_ws/install/setup.bash" >> ~/.bashrc
 
 # Copy entrypoint script
-COPY tb3_multi_robot/docker/entrypoint.sh /entrypoint.sh
+COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # Use it as entrypoint
@@ -66,4 +80,3 @@ ENTRYPOINT ["/entrypoint.sh"]
 
 # Default workdir inside container
 WORKDIR /opt/ros2_ws
-

@@ -25,6 +25,7 @@ from launch.actions import (
     IncludeLaunchDescription,
     DeclareLaunchArgument,
 )
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -50,8 +51,20 @@ def generate_launch_description():
         launch_arguments={'gz_args': '-g -v2', 'on_exit_shutdown': 'true'}.items()
     )
 
+    # Optional TwinSight robot_adapter (one adapter_node per robot).
+    # Off by default so the simulation runs standalone; enabling it requires
+    # the robot_adapter package to be built in the same workspace.
+    use_robot_adapter = LaunchConfiguration('use_robot_adapter')
+    declare_use_robot_adapter = DeclareLaunchArgument(
+        'use_robot_adapter',
+        default_value='false',
+        description='Start a TwinSight robot_adapter node for every robot '
+                    '(requires the robot_adapter package).'
+    )
+
     # Main LaunchDescription
     ld = LaunchDescription()
+    ld.add_action(declare_use_robot_adapter)
     ld.add_action(gzserver_cmd)
     ld.add_action(gzclient_cmd)
 
@@ -141,11 +154,14 @@ def generate_launch_description():
         robot_secret = os.environ.get(f'{env_prefix}_ROBOT_SECRET', '')
 
 
+        # Only executed when use_robot_adapter:=true, so the robot_adapter
+        # package is not needed for a standalone run.
         robot_adapter_node = Node(
             package='robot_adapter',
             executable='adapter_node',
             namespace=namespace,
             output='screen',
+            condition=IfCondition(use_robot_adapter),
             parameters=[{
                 'api_base_url': api_base_url,
                 'robot_id': robot_id,

@@ -1,44 +1,203 @@
+# Multi-TurtleBot3 Simulation: ROS 2 Jazzy · Gazebo Harmonic · Nav2
 
-# Multi-TurtleBot3 Simulation with ROS 2 Jazzy & Gazebo Harmonic
-This repository provides a scalable ROS 2-based framework to simulate multiple TurtleBot3 robots in Gazebo with Navigation2 (Nav2) support. Each robot runs within its own namespace, enabling clean separation and interaction-free operation.
+This repository simulates several TurtleBot3 robots in one Gazebo Harmonic world. Each robot gets its own ROS 2 namespace (`/tb1`, `/tb2`, …), its own TF tree, its own Nav2 stack and RViz window, and a mock battery.
 
-The 'master' branch is updated with Jazzy support.  The 'humble' branch includes an implementation that functions with the humble framework, while the 'foxy' branch provides support specifically for ROS2 Foxy.
+It is a fork of [arshadlab/tb3_multi_robot](https://github.com/arshadlab/tb3_multi_robot). Use the **`main`** branch. The simulation runs standalone, with no extra repositories needed. The `humble` and `foxy` branches contain unchanged upstream code and are not covered here.
 
-## Branch Mapping
-'master' -> ROS2 Jazzy
+---
 
-'humble' -> ROS2 Humble
+## Contents
 
-'foxy' -> ROS2 Foxy
+1. [How it fits together](#1-how-it-fits-together)
+2. [Repository layout](#2-repository-layout)
+3. [Choose how to run it](#3-choose-how-to-run-it)
+4. [Get the code](#4-get-the-code)
+5. [Configure before you build](#5-configure-before-you-build)
+6. [Run with Docker Compose](#6-run-with-docker-compose)
+7. [Run natively on Ubuntu 24.04](#7-run-natively-on-ubuntu-2404)
+8. [Check that it works](#8-check-that-it-works)
+9. [Operating the robots](#9-operating-the-robots)
+10. [Developing against a local checkout inside Docker](#10-developing-against-a-local-checkout-inside-docker)
+11. [Troubleshooting and performance](#11-troubleshooting-and-performance)
+12. [FAQ: why `/tf` is remapped](#12-faq-why-tf-is-remapped)
+13. [Optional: running with the TwinSight robot_adapter](#13-optional-running-with-the-twinsight-robot_adapter)
+14. [Credits](#14-credits)
+15. [Appendix: topics per robot with the Nav2 backend](#appendix-topics-per-robot-with-the-nav2-backend)
 
-The Jazzy version features a streamlined multi-robot setup that improves usability and launch flexibility.
+---
 
-## Prerequisites
+## 1. How it fits together
 
-- **Operating System**: Ubuntu 24.04
-- **ROS Version**: [ROS 2 Jazzy](https://docs.ros.org/en/jazzy/Installation.html)
-- **Gazebo Version**: Gazebo Harmonic
+The simulation is started in two steps, always in this order:
 
-Refer to the official ROS2 Jazzy installation guide: [link](https://docs.ros.org/en/jazzy/Installation.html)
+| Step | Launch file | Starts once | Starts for every enabled robot |
+|---|---|---|---|
+| **1. World** | `tb3_world.launch.py` | Gazebo server and GUI, `/clock` bridge | Robot spawned in Gazebo as `<name>_<model>` (e.g. `tb1_burger`), `robot_state_publisher`, `ros_gz_bridge`, plus a camera bridge if the model is `waffle` |
+| **2a. Nav2 backend** | `tb3_nav2.launch.py` | — | Nav2 bringup (map server, AMCL, planner, controller, behaviors, BT navigator, collision monitor, docking…), an RViz window, `mock_battery` |
+| **2b. Simple driver** (instead of 2a) | `drive.launch.py` | — | `turtlebot3_drive`, a basic obstacle-avoiding wander node |
 
-### Install Required Dependencies
+Before you start:
+
+- **[`config/robots.yaml`](config/robots.yaml) controls everything.** It sets which robots exist, their names and their start poses, and every launch file reads it.
+- **The robot model** comes from the `TURTLEBOT3_MODEL` environment variable. The default is `burger`.
+- **Battery data only exists in Nav2 mode.** `mock_battery` is started by `tb3_nav2.launch.py`. If only step 1 is running, or step 2b, nothing publishes `/<ns>/battery_state`.
+- **Run either 2a or 2b, never both.** Both publish to `/<ns>/cmd_vel`.
+
+---
+
+## 2. Repository layout
 
 ```
-apt-get update && apt-get install -y \
-    git \
-    python3-colcon-common-extensions \
-    python3-rosdep \
-    python3-vcstool \
-    curl \
-    ros-jazzy-rmw-implementation \
-    ros-jazzy-rmw-cyclonedds-cpp
+tb3_multi_robot/
+├── config/robots.yaml           # robot list, names, start poses, enabled flags  ← edit this
+├── launch/
+│   ├── tb3_world.launch.py      # step 1: Gazebo + per-robot spawn/RSP/bridge
+│   ├── tb3_nav2.launch.py       # step 2a: per-robot Nav2 + RViz + mock_battery
+│   └── drive.launch.py          # step 2b: per-robot simple driver
+├── params/
+│   ├── <model>_bridge.yaml      # ros_gz_bridge topic templates (namespaced at launch)
+│   └── <model>_nav2_params.yaml # Nav2 params template (namespaced + initial pose at launch)
+├── map/map.yaml, map.pgm        # map used by every robot's map_server
+├── models/, urdf/, worlds/      # TurtleBot3 models and the tb3_world world
+├── rviz/tb3_navigation2.rviz    # RViz template (title gets the robot name)
+├── multi_robot_scripts/         # launch helpers (namespacing) + turtlebot3_drive node
+├── tb3_multi_robot/mock_battery.py
+├── twin_configs/tbX/            # per-robot map copies (not used by any launch file)
+└── docker/
+    ├── Dockerfile
+    ├── docker-compose.yaml                  # standalone stack
+    ├── docker-compose.robot-adapter.yaml    # optional override, see section 13
+    └── entrypoint.sh
 ```
 
-When launching multiple robots with Nav2, the number of DDS participants can quickly exceed the default limit set by CycloneDDS. To avoid participant ID exhaustion, create a configuration file to increase the allowable range:
+At launch time, the bridge YAML, Nav2 params and RViz config are generated for each robot under `/tmp`, for example `/tmp/tb1_bridge.yaml`, `/tmp/tb1_nav2_params.yaml` and `/tmp/tb1_rviz_config.rviz`. Look there to see exactly what a robot was started with.
 
-Create a file with below contents
-e.g `$HOME/cyclonedds.xml`
+---
+
+## 3. Choose how to run it
+
+| | **Docker Compose** (section 6) | **Native** (section 7) |
+|---|---|---|
+| Host OS | Any Linux with Docker and an X11 display | Ubuntu 24.04 with an X11 display |
+| GPU | NVIDIA GPU + NVIDIA Container Toolkit (the compose file requests `gpus: all`) | Any GPU that runs Gazebo Harmonic |
+| ROS on host | Not needed | ROS 2 Jazzy |
+| Best for | Running the stack as-is | Developing and debugging nodes |
+
+Both paths start the same way: get the code (section 4), then configure it (section 5).
+
+---
+
+## 4. Get the code
+
+```bash
+mkdir -p ~/multirobot_ws/src
+cd ~/multirobot_ws/src
+git clone https://github.com/TwinSight-AI/tb3_multi_robot.git -b main
 ```
+
+The rest of this README assumes the workspace is at `~/multirobot_ws`. Adjust the paths if you put it elsewhere.
+
+---
+
+## 5. Configure before you build
+
+The build copies `robots.yaml` into the install space (native) or the Docker image (Compose). Edit it before building, and rebuild after every change.
+
+### 5.1 Robots: `config/robots.yaml`
+
+```yaml
+robots:
+  - name: tb1          # namespace (/tb1) and Gazebo entity prefix (tb1_burger)
+    x_pose: "-1.5"     # spawn position in Gazebo, also AMCL's initial pose
+    y_pose: "-0.5"
+    z_pose: 0.01       # used only for AMCL's initial pose (spawn height is fixed to 0.01)
+    yaw: 0.0           # used only for AMCL's initial pose (see note below)
+    enabled: true      # false = robot is not spawned and gets no Nav2 stack
+  - name: tb2
+    ...
+```
+
+By default **all four robots (tb1–tb4) are enabled**. They spawn at (-1.5, -0.5), (-1.5, 0.5), (1.5, -0.5) and (1.5, 0.5).
+
+> ⚠️ **Keep `yaw: 0.0`.** The Gazebo spawner ignores yaw, so every robot spawns facing +X. A non-zero yaw only reaches AMCL, so that robot would start mislocalized.
+
+Four robots with Nav2 is a heavy load. If your machine struggles, disable some of them (see section 11).
+
+### 5.2 Robot model: `TURTLEBOT3_MODEL`
+
+| Value | Status |
+|---|---|
+| `burger` (default) | Supported. Lidar + IMU, no camera. |
+| `waffle` | Supported. Adds a camera: `/<ns>/camera/image_raw` and `/<ns>/camera/camera_info`. |
+| `waffle_pi`, `burger_cam` | **Not supported.** Some of their files exist, but the Gazebo models and parameter files are incomplete. |
+
+For a native run, set it in the shell before launching, for example `export TURTLEBOT3_MODEL=waffle`. Use the same value for step 1 and step 2.
+
+---
+
+## 6. Run with Docker Compose
+
+`docker/docker-compose.yaml` builds one image from this repository and runs two containers from it:
+
+- **`tb3-world`** runs `ros2 launch tb3_multi_robot tb3_world.launch.py` and opens the Gazebo window.
+- **`tb3-nav2`** runs `ros2 launch tb3_multi_robot tb3_nav2.launch.py` and opens one RViz window per robot. It starts after `tb3-world`.
+
+### 6.1 Allow the containers to open windows
+
+```bash
+xhost +local:docker
+```
+
+### 6.2 Build and start
+
+```bash
+cd ~/multirobot_ws/src/tb3_multi_robot/docker
+docker compose up --build
+```
+
+The image contains a copy of the repository, not your live files. Run `up --build` again after any change to `robots.yaml` or the code.
+
+To stop, press `Ctrl+C`, then run `docker compose down`.
+
+### 6.3 Open a shell in a running container
+
+`docker exec` skips the entrypoint, so source the environment yourself:
+
+```bash
+docker exec -it tb3-world bash -c "source /opt/ros/jazzy/setup.bash && source /opt/ros2_ws/install/setup.bash && exec bash"
+```
+
+Then continue with section 8.
+
+---
+
+## 7. Run natively on Ubuntu 24.04
+
+### 7.1 Install ROS 2 Jazzy and the required packages
+
+Install ROS 2 Jazzy by following the [official guide](https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html). Then install the packages this repo needs:
+
+```bash
+sudo apt update && sudo apt install -y \
+  ros-jazzy-desktop \
+  ros-jazzy-ros-gz \
+  ros-jazzy-navigation2 \
+  ros-jazzy-nav2-bringup \
+  ros-jazzy-rmw-cyclonedds-cpp \
+  ros-jazzy-tf-transformations \
+  python3-colcon-common-extensions \
+  python3-rosdep \
+  python3-vcstool \
+  git
+```
+
+`ros-jazzy-ros-gz` brings in Gazebo Harmonic. The `turtlebot3_drive` node needs `ros-jazzy-tf-transformations`.
+
+### 7.2 Configure DDS (CycloneDDS)
+
+Several robots with full Nav2 stacks create more DDS participants than CycloneDDS allows by default. Create `~/cyclonedds.xml`:
+
+```xml
 <CycloneDDS>
   <Discovery>
     <ParticipantIndex>auto</ParticipantIndex>
@@ -47,464 +206,463 @@ e.g `$HOME/cyclonedds.xml`
 </CycloneDDS>
 ```
 
-Set the CYCLONEDDS_URI environment variable to point to the XML configuration file. To make this persistent across terminal sessions, add the export command to ~/.bashrc:
+Add both lines to `~/.bashrc`. The first one is essential: without it, ROS 2 uses Fast DDS and ignores the file above.
 
-```
+```bash
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 export CYCLONEDDS_URI=$HOME/cyclonedds.xml
 ```
 
-## Setup Workspace and Clone Repository
+### 7.3 Install dependencies and build
 
-```
-$ mkdir -p robot_ws/src
-$ cd robot_ws/src
+```bash
+cd ~/multirobot_ws
+source /opt/ros/jazzy/setup.bash
 
-# Clone the master branch of the multi-robot repo
-$ git clone  https://github.com/arshadlab/tb3_multi_robot.git -b master
+sudo rosdep init        # only once per machine; skip if it says it is already initialized
+rosdep update
+rosdep install --from-paths src --ignore-src -r -y
 
-# Initialize the workspace
-$ cd robot_ws
-$ source /opt/ros/jazzy/setup.bash
-$ rosdep install --from-paths src -r -y
-```
-
- It's recommended to download the default model assets to ensure proper rendering and simulation behavior.
-
-```
-$ mkdir -p ~/.gazebo/models
-$ git clone https://github.com/osrf/gazebo_models ~/.gazebo/models
+colcon build --symlink-install
+source install/setup.bash
 ```
 
-## 🔧 Build the Workspace
-After installing dependencies and setting up the workspace, compile the ROS 2 packages using colcon:
+`rosdep` may report a few keys it cannot resolve, such as `gazebo_ros_pkgs`, which belongs to Gazebo Classic. This is expected. The `-r` flag continues past them, and the packages from 7.1 cover what is actually used.
 
-```
-$ cd robot_ws/
-$ colcon build --symlink-install
-$ source ./install/setup.bash
-```
+### 7.4 Launch
 
-Then, update the config/robots.yaml file to define the robot setup.
-By default, four robots (tb1, tb2, tb3, tb4) are listed, with only tb1 and tb3 enabled. Modify the names, positions, and enabled flags as needed.
+Source the environment in every new terminal before running anything:
 
-## 🚀 Launch the Simulation (Robots Only)
-Use the following command to start the Gazebo simulation with the configured TurtleBot3 robots:
-
-```
-$ ros2 launch tb3_multi_robot tb3_world.launch.py
-```
-<img width="1840" height="1004" alt="image" src="https://github.com/user-attachments/assets/68d08e6a-8ab6-4f3d-98b3-504102b96312" />
-
-After the simulation is launched, the system can either proceed with the Nav2 stack for autonomous navigation or use driving nodes for manual or scripted control.
-A Python-based turtlebot3_drive script is included, replicating the original C++ node functionality while addressing compatibility issues with ROS 2 Jazzy and Gazebo Harmonic.
-
-## 🚗 Launch Driving Nodes (Optional)
-The original turtlebot3_drive application is not fully compatible with ROS 2 Jazzy and Gazebo Harmonic due to message type differences (e.g., use of TwistStamped for the /cmd_vel topic).
-To address this, a Python-based equivalent is provided using compatible message types.
-
-To launch the driving node for each robot, use the command below.
-While a drive.launch.py file is included for automated multi-robot support, it is still under development and may require manual execution for each robot.
-
-```
-$ ./install/tb3_multi_robot/bin/turtlebot3_drive --ros-args -r __ns:=/tb1
+```bash
+source /opt/ros/jazzy/setup.bash
+source ~/multirobot_ws/install/setup.bash
 ```
 
-Replace /tb1 with the appropriate robot namespace (/tb2, /tb3, etc.) as defined in robot configuration.
+**Terminal 1: world and robots**
 
-## 🧭 Launch Navigation2 Stack
-
-With the robots running in Gazebo (via tb3_world.launch.py), the Navigation2 (Nav2) stack can be launched from a separate terminal.
-
+```bash
+ros2 launch tb3_multi_robot tb3_world.launch.py
 ```
-$ ros2 launch  tb3_multi_robot tb3_nav2.launch.py
+
+Wait until the Gazebo window shows all robots.
+
+**Terminal 2: Nav2 backend**
+
+```bash
+ros2 launch tb3_multi_robot tb3_nav2.launch.py
 ```
-This will launch Nav2 nodes for all enabled robots using their respective namespaces.
 
-<img width="2172" height="1721" alt="image" src="https://github.com/user-attachments/assets/d4c9e2ff-9721-4711-8e89-c25acbb3b207" />
+One RViz window opens per robot, with the panel titled `Displays (tb1)`, `Displays (tb2)`, and so on. Each robot is already localized at its spawn pose (see 9.2).
 
-The RViz2 panel title has been updated to include the corresponding robot name, making it easier to match each RViz instance with its respective robot in the Gazebo simulation.
+Optional `tb3_nav2.launch.py` arguments: `map:=<path to map.yaml>`, `params_file:=<path>`, `use_sim_time:=true|false`.
 
-### 🧭 Set Initial Pose
-`tb3_nav2.launch.py` automatically seeds each robot's AMCL initial pose (`set_initial_pose` / `initial_pose` in the namespaced Nav2 params file) with the same `x_pose`, `y_pose`, `z_pose`, and `yaw` values defined for that robot in [`config/robots.yaml`](config/robots.yaml). Since these are the same values used to spawn the robot in Gazebo, each robot starts already localized — no manual 2D Pose Estimate click is required.
+> **The first launch needs internet access.** The world downloads *Ground Plane* and *Sun* from Gazebo Fuel and caches them in `~/.gz/fuel`. Do not clone `osrf/gazebo_models` into `~/.gazebo/models`, as the upstream README suggests. That folder is only used by Gazebo Classic.
 
-If a robot's actual position ever diverges from its configured spawn pose (e.g. it was moved, or localization needs to be reset), the pose can still be corrected manually.
+---
 
-With RViz running, the robot’s initial position and orientation can be set using the 2D Pose Estimate button, aligned to its simulated placement and heading.
+## 8. Check that it works
 
-<img width="2180" height="1676" alt="image" src="https://github.com/user-attachments/assets/6a0c1bb0-32b1-4cf2-ad74-2da1ffba88e7" />
+Run these from a sourced terminal (native) or a container shell (section 6.3):
 
-Alternatively, the initial pose can be set programmatically via the command line when the robot’s position and orientation are known from the simulation.
-
-To retrieve the live pose of robots from Gazebo Harmonic, run:
-
+```bash
+ros2 topic list | grep '^/tb1/'            # per-robot topics (full list in the Appendix)
+ros2 topic hz /tb1/scan                    # lidar is streaming
+ros2 topic echo /tb1/odom --once           # odometry from Gazebo
+ros2 topic echo /tb1/amcl_pose --once      # AMCL is localized
+ros2 topic echo /tb1/battery_state --once  # mock battery (Nav2 mode only)
 ```
-$ gz topic -e -t /world/default/pose/info
-```
-This command lists the poses of all simulated entities. Identify the target robot by its name, such as tb1_waffle or tb1_burger.
 
-Update the sample commands below with the position and orientation values obtained. The covariance typically remains unchanged.
-Below commands are given for included robots.  User will need to update them for any custom robots. 
+Then send a navigation goal (9.1) and watch the robot move in Gazebo and RViz.
 
+---
+
+## 9. Operating the robots
+
+### 9.1 Send a navigation goal
+
+**From RViz:** in that robot's RViz window, click **Nav2 Goal**, then drag on the map.
+
+**From the command line** (replace `tb1` with any robot name):
+
+```bash
+ros2 action send_goal /tb1/navigate_to_pose nav2_msgs/action/NavigateToPose \
+  "{pose: {header: {frame_id: map}, pose: {position: {x: 2.0, y: 0.0, z: 0.0}, orientation: {w: 1.0}}}}"
 ```
-# TB1
-$ ros2 topic pub --once /tb1/initialpose geometry_msgs/msg/PoseWithCovarianceStamped "header:
-  frame_id: 'map'
-pose:
+
+The Appendix lists the other Nav2 actions available for each robot, such as waypoints, spin, backup and docking.
+
+### 9.2 Initial pose (localization)
+
+`tb3_nav2.launch.py` seeds AMCL with each robot's `x_pose`, `y_pose`, `z_pose` and `yaw` from `robots.yaml`. These are the same values the robot spawns with, so **no manual "2D Pose Estimate" is needed at startup**.
+
+You only need to re-localize when a robot's real position no longer matches its estimate, for example after you move it in Gazebo:
+
+- **RViz:** in that robot's window, click **2D Pose Estimate**, then click and drag at the robot's real position and heading.
+- **Command line:** read the robot's real pose from Gazebo, then publish it.
+
+  ```bash
+  gz topic -e -t /world/default/pose/info    # look for the entity named tb1_burger (or tb1_waffle)
+  ```
+
+  ```bash
+  ros2 topic pub --once /tb1/initialpose geometry_msgs/msg/PoseWithCovarianceStamped "
+  header: {frame_id: map}
   pose:
-    position: {x: -1.500653720729433, y: -0.5000000060919606, z: 0.0}
-    orientation: {x: 0.0, y: 0.0, z: -1.9562638e-06, w: 0.99999595}
-  covariance: [0.25, 0, 0, 0, 0, 0,
-               0, 0.25, 0, 0, 0, 0,
-               0, 0, 0.0001, 0, 0, 0,
-               0, 0, 0, 0.0001, 0, 0,
-               0, 0, 0, 0, 0.0001, 0,
-               0, 0, 0, 0, 0, 0.06853892]"
-               
-# TB2
-$ ros2 topic pub --once /tb2/initialpose geometry_msgs/msg/PoseWithCovarianceStamped "header:
-  frame_id: 'map'
-pose:
-  pose:
-    position: {x: -1.500653720729433, y: 0.49999999390803895, z: 0.0}
-    orientation: {x: 0.0, y: 0.0, z: -1.9562638e-06, w: 0.99999595}
-  covariance: [0.25, 0, 0, 0, 0, 0,
-               0, 0.25, 0, 0, 0, 0,
-               0, 0, 0.0001, 0, 0, 0,
-               0, 0, 0, 0.0001, 0, 0,
-               0, 0, 0, 0, 0.0001, 0,
-               0, 0, 0, 0, 0, 0.06853892]"
-   
-# TB3
-$ ros2 topic pub --once /tb3/initialpose geometry_msgs/msg/PoseWithCovarianceStamped "header:
-  frame_id: 'map'
-pose:
-  pose:
-    position: {x: 1.499346279270567, y: -0.50000000609196049, z: 0.0}
-    orientation: {x: 0.0, y: 0.0, z: -1.9562638e-06, w: 0.99999595}
-  covariance: [0.25, 0, 0, 0, 0, 0,
-               0, 0.25, 0, 0, 0, 0,
-               0, 0, 0.0001, 0, 0, 0,
-               0, 0, 0, 0.0001, 0, 0,
-               0, 0, 0, 0, 0.0001, 0,
-               0, 0, 0, 0, 0, 0.06853892]"
-  
-# TB4
-$ ros2 topic pub --once /tb4/initialpose geometry_msgs/msg/PoseWithCovarianceStamped "header:
-  frame_id: 'map'
-pose:
-  pose:
-    position: {x: 1.499346279270567, y: 0.499999993908039, z: 0.0}
-    orientation: {x: 0.0, y: 0.0, z: -1.9562638e-06, w: 0.99999595}
-  covariance: [0.25, 0, 0, 0, 0, 0,
-               0, 0.25, 0, 0, 0, 0,
-               0, 0, 0.0001, 0, 0, 0,
-               0, 0, 0, 0.0001, 0, 0,
-               0, 0, 0, 0, 0.0001, 0,
-               0, 0, 0, 0, 0, 0.06853892]"
+    pose:
+      position: {x: -1.5, y: -0.5, z: 0.0}
+      orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}
+    covariance: [0.25, 0, 0, 0, 0, 0,
+                 0, 0.25, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0.0685]"
+  ```
+
+  Change the namespace in the topic name, and the position and orientation (a quaternion), to match the robot.
+
+### 9.3 Driving without Nav2
+
+Run this **instead of** `tb3_nav2.launch.py`, after `tb3_world.launch.py` is up:
+
+```bash
+# all enabled robots
+ros2 launch tb3_multi_robot drive.launch.py
+
+# or a single robot
+ros2 run tb3_multi_robot turtlebot3_drive --ros-args -r __ns:=/tb1 -p use_sim_time:=true
 ```
 
-### 🎯 Set Navigation Goal
+This is a Python port of the upstream TurtleBot3 `turtlebot3_drive` node. It publishes `geometry_msgs/TwistStamped`, which is the type the Gazebo Harmonic bridge expects.
 
-A navigation goal may be sent using the 'Nav2 Goal' button in RViz after launching the Nav2 stack.
+This mode has no battery data. To get it, start a mock battery for each robot:
 
-<img width="1091" height="842" alt="image" src="https://github.com/user-attachments/assets/99e0ebc3-09e8-47e6-be67-5743ca5e6d15" />
-
-Alternatively, goals can be sent programmatically via the command line using ROS 2 action interface.
-
-Below is an example command for setting a goal for tb1:
-
-```
-$ ros2 action send_goal /tb1/navigate_to_pose nav2_msgs/action/NavigateToPose \
-'{
-  pose: {
-    header: {
-      frame_id: "map"
-    },
-    pose: {
-      position: {
-        x: 2.0,
-        y: 0.0,
-        z: 0.0
-      },
-      orientation: {
-        x: 0.0,
-        y: 0.0,
-        z: 0.0,
-        w: 1.0
-      }
-    }
-  }
-}'
+```bash
+ros2 run tb3_multi_robot mock_battery --ros-args -r __ns:=/tb1 -p battery_topic:=battery_state
 ```
 
-Replace /tb1 with the appropriate robot namespace (e.g., /tb2, /tb3, etc.) and modify the x, y, and orientation fields to specify the desired goal pose.
+### 9.4 RViz / rqt for a single robot
 
-## RQT Usage
-rqt is a versatile tool for inspecting various ROS 2 data. In a multi-robot setup where each robot operates within its own namespace, specific configurations are required for correct usage.
-Ensure that the /tf and /tf_static topics are mapped using absolute names (prefixed with /). Additionally, launch rqt within the desired robot's namespace to correctly visualize and interact with its respective topics.
+TF listeners always subscribe to the absolute `/tf` and `/tf_static` topics. When you start a tool inside a robot's namespace, remap them (section 12 explains why):
 
-```
-rqt --ros-args -r __ns:=/tb1 -r /tf:=tf -r /tf_static:=tf_static
-```
-
-<img width="1630" height="1572" alt="image" src="https://github.com/user-attachments/assets/a8f4221b-705e-4b52-ab04-03916a60de08" />
-
-
-## 🌐 Local Deploy: Simulation + TwinSight Robot Adapter
-
-To run the multi-robot simulation alongside [robot_adapter](https://github.com/TwinSight-AI/robot_adapter) (bridges each robot's telemetry to the TwinSight platform), build both packages in the same workspace.
-
-### 1. Create the workspace and clone both repositories
-
-```
-$ mkdir -p multirobot_ws/src
-$ cd multirobot_ws/src
-
-$ git clone https://github.com/arshadlab/tb3_multi_robot.git -b master
-$ git clone https://github.com/TwinSight-AI/robot_adapter.git
+```bash
+rqt   --ros-args -r __ns:=/tb1 -r /tf:=tf -r /tf_static:=tf_static
+rviz2 --ros-args -r __ns:=/tb1 -r /tf:=tf -r /tf_static:=tf_static
 ```
 
-### 2. Source ROS 2 and install dependencies
+---
 
-```
-$ cd multirobot_ws
-$ source /opt/ros/jazzy/setup.bash
-$ rosdep install --from-paths src -r -y
-```
+## 10. Developing against a local checkout inside Docker
 
-### 3. Build the workspace
+The Compose image holds a **copy** of the repository in `/opt/ros2_ws`. To edit code on the host and build it inside the container, mount your workspace and build there:
 
-```
-$ colcon build --symlink-install
-$ source install/setup.bash
-```
+```bash
+cd ~/multirobot_ws/src/tb3_multi_robot
+docker build -t tb3_multi_robot:dev -f docker/Dockerfile .
 
-### 4. Launch the simulation and Nav2 stack
-
-In separate terminals (each sourcing `install/setup.bash` first):
-
-```
-# Terminal 1 - Gazebo + robots
-$ ros2 launch tb3_multi_robot tb3_world.launch.py
-
-# Terminal 2 - Nav2 stack
-$ ros2 launch tb3_multi_robot tb3_nav2.launch.py
-```
-
-### 5. Launch a robot_adapter instance per enabled robot
-
-Each enabled robot in `config/robots.yaml` (e.g. `tb1`, `tb3`) needs its own `robot_adapter` instance, pointed at that robot's namespaced topics and its TwinSight `robot_id`/`robot_secret`:
-
-```
-# Terminal 3 - adapter for tb1
-$ ros2 launch robot_adapter adapter.launch.py \
-    api_base_url:=http://localhost:8001 \
-    robot_id:=<tb1_robot_id> \
-    robot_secret:=<tb1_robot_secret> \
-    odom_topic:=/tb1/odom \
-    battery_topic:=/tb1/battery_state \
-    imu_topic:=/tb1/imu 
-
-# Terminal 4 - adapter for tb3
-$ ros2 launch robot_adapter adapter.launch.py \
-    api_base_url:=http://localhost:8001 \
-    robot_id:=<tb3_robot_id> \
-    robot_secret:=<tb3_robot_secret> \
-    odom_topic:=/tb3/odom \
-    battery_topic:=/tb3/battery_state \
-    imu_topic:=/tb3/imu 
-```
-
-`enable_streaming`/`enable_teleop` are disabled above because the burger model used in this simulation has no camera bridge. If you switch a robot to `waffle`/`waffle_pi` (which do bridge a camera), set them back to `true` and point `image_topic`/`image_topic2` at that robot's namespaced camera topics (e.g. `/tb1/camera/image_raw`).
-
-Replace `<tbX_robot_id>` / `<tbX_robot_secret>` with the credentials issued for that robot in the TwinSight platform, and `api_base_url` with wherever your TwinSight backend is reachable.
-
-## 🐳 Running via Dockers
-A Dockerfile is provided to simplify the setup and execution of multi-robot simulation using ROS 2 Jazzy. This enables running the project even on systems other than Ubuntu 24.04 (e.g. Ubuntu 22.04) without requiring ROS installation on the host. The Docker image includes all necessary dependencies preconfigured.
-
-### 🛠️ Build Docker image
-
-The image also builds the `robot_adapter` package (used by `tb3_world.launch.py` for the per-robot adapter node), so it must be cloned as a sibling of `tb3_multi_robot` in the same parent directory before building:
-
-```
-$ mkdir -p ws/src && cd ws/src
-$ git clone  https://github.com/arshadlab/tb3_multi_robot.git -b jazzy
-$ git clone  https://github.com/TwinSight-AI/robot_adapter.git
-$ docker build -t tb3_multi_robot:jazzy -f tb3_multi_robot/docker/Dockerfile .
-```
-
-This will build the container and also copy and build both repos in /opt/ros2_ws.
-
-### 🚀 Launch robots in Gazebo
-
-Run the container and launch the Gazebo simulation:
-
-```
-$ docker run -it --rm \
+docker run -it --rm \
   --user $(id -u):$(id -g) \
   --name tb3sim \
-  --env="DISPLAY=$DISPLAY" \
-  --env="QT_X11_NO_MITSHM=1" \
-  --volume="/tmp/.X11-unix:/tmp/.X11-unix:rw" \
-  --volume="/dev/dri:/dev/dri" \
-  tb3_multi_robot:jazzy \
-  ros2 launch tb3_multi_robot tb3_world.launch.py
+  --env DISPLAY=$DISPLAY \
+  --env QT_X11_NO_MITSHM=1 \
+  --volume /tmp/.X11-unix:/tmp/.X11-unix:rw \
+  --volume /dev/dri:/dev/dri \
+  --volume $HOME/multirobot_ws:/robot_ws \
+  tb3_multi_robot:dev bash
 ```
 
-Ensure the command `xhost +local:docker` is executed on the host system to permit GUI display access for Docker containers.
+Inside the container:
 
-
-### Launch Nav2 nodes in already running container
-
-After the robots are active, open a new terminal and run:
-
-```
-$ docker exec -it tb3sim bash -c "
-  source /opt/ros2_ws/install/setup.bash && \
-  ros2 launch tb3_multi_robot tb3_nav2.launch.py
-"
+```bash
+cd /robot_ws
+colcon build              # no --symlink-install if you also build on the host
+source install/setup.bash
+ros2 launch tb3_multi_robot tb3_world.launch.py
 ```
 
-This launches the Nav2 stack inside the already running container.
+Open a second terminal into the same container:
 
-## Accessing host project folder via Docker.
-
-To build and run the multi-robot demo using a local (host-cloned) repository inside the Docker environment, mount the host directory into the container. Note that the default /opt/ros2_ws workspace inside the container will not be used in this case.
-
-```
-$ docker run -it --rm \
-  --user $(id -u):$(id -g) \
-  --name tb3sim \
-  --env="DISPLAY=$DISPLAY" \
-  --env="QT_X11_NO_MITSHM=1" \
-  --volume="/tmp/.X11-unix:/tmp/.X11-unix:rw" \
-  --volume="/dev/dri:/dev/dri" \
-  --volume="<absolute path of local project/workspace>:/robot_ws" \
-  tb3_multi_robot:jazzy \
-  bash
-```
-Note: Replace < absolute path to local project/workspace > with the full path to the cloned tb3_multi_robot directory on the host system.
-
-This will open an interactive shell. Navigate to /robot_ws inside the container and build the workspace using colcon. All changes will reflect directly in the host directory.
-
-To access the running container from another terminal, use:
-
-```
-$ docker exec -it tb3sim bash
+```bash
+docker exec -it tb3sim bash -c "source /opt/ros/jazzy/setup.bash && source /robot_ws/install/setup.bash && exec bash"
+ros2 launch tb3_multi_robot tb3_nav2.launch.py
 ```
 
-Note: By default, this will place the shell in /opt/ros2_ws. Change directory to /robot_ws manually and source ./install/setup.bash from there.
-When building both inside and outside the container, avoid using --symlink-install to prevent conflicts.
+Build output goes to `/robot_ws`, which is your workspace folder on the host.
 
-## Robot Configuration
+---
 
-The placement and activation of individual robots are defined in the config/robots.yaml file. Each robot is assigned a unique name and initial position. Set the enabled flag to true to include a robot in the simulation or false to exclude it.
+## 11. Troubleshooting and performance
 
-Below is an example configuration used in the Nav2 simulation:
+| Symptom | Likely cause / fix |
+|---|---|
+| `docker compose up` fails with a GPU / `nvidia` error | The compose file requests `gpus: all`. Install the NVIDIA Container Toolkit. On a machine without an NVIDIA GPU, delete the `gpus: all` line. |
+| No window appears from Docker | Run `xhost +local:docker` on the host and check that `DISPLAY` is set. |
+| A robot does not localize, or drifts right after start | Its `yaw` in `robots.yaml` is not 0 (section 5.1), or it was moved. Re-localize it (9.2). |
+| Nav2 nodes fail to start, or discovery is flaky with many robots | You are hitting the DDS participant limit. Set `RMW_IMPLEMENTATION` and `CYCLONEDDS_URI` (7.2). |
+| Gazebo hangs on the first start | It is downloading models from Gazebo Fuel. Check your internet access. |
+| Changes to `robots.yaml` have no effect | Rebuild with `colcon build`, or `docker compose up --build`. |
 
-```
- robots:
-  - name: tb1
-    x_pose: "-1.5"
-    y_pose: "-0.5"
-    z_pose: 0.01
-    enabled: true
-  - name: tb2
-    x_pose: "-1.5"
-    y_pose: "0.5"
-    z_pose: 0.01
-    enabled: false
-  - name: tb3
-    x_pose: "1.5"
-    y_pose: "-0.5"
-    z_pose: 0.01
-    enabled: true
-  - name: tb4
-    x_pose: "1.5"
-    y_pose: "0.5"
-    z_pose: 0.01
-    enabled: false
-```
-💡 Robots can be enabled or disabled by updating the enabled field, and their starting poses can be configured by modifying the position values accordingly.
+**Performance.** Four robots with full Nav2 stacks are demanding. To lighten the load:
 
-## Improving performance
+1. **Run fewer robots.** Set `enabled: false` on some of them. Two robots are much lighter than four.
+2. **Lower the physics rate** in `worlds/tb3_world.world`. It currently runs at 1000 Hz (`max_step_size` 0.001). For example:
+   ```xml
+   <real_time_update_rate>100.0</real_time_update_rate>
+   <max_step_size>0.01</max_step_size>
+   ```
+3. **Lower the sensor rates** in the robot model (`models/turtlebot3_<model>/model.sdf`) if you do not need full-rate `/scan`, `/imu` or `/odom`.
 
-Simulating multiple robots (especially 4 or more) can be demanding on system resources. Below are some suggestions to help optimize performance:
+---
 
-### 1. Limit Robot Count
-Running fewer robots significantly reduces CPU and memory load. Consider limiting the simulation to 2 robots if performance is a concern.
+## 12. FAQ: why `/tf` is remapped
 
-### 2. Lower Simulation Update Rates
-Reduce the update frequency in the Gazebo .world file to ease the physics computation load. In worlds/tb3_world.world, modify the <physics> block as follows:
+Each robot has its **own TF tree** on `/<ns>/tf` and `/<ns>/tf_static`. That way, frame names such as `odom`, `base_footprint` and `base_link` do not clash between robots. The catch is that the TF listener in `tf2_ros` always subscribes to the **absolute** topics `/tf` and `/tf_static`, even when its node runs inside a namespace. You can check this with `rviz2 --ros-args -r __ns:=/tb1`: it still listens on the global `/tf`.
 
-```
-<physics type="ode">
-      <real_time_update_rate>100.0</real_time_update_rate>
-      <max_step_size>0.01</max_step_size>
-      <real_time_factor>1</real_time_factor>
-```
+For this reason, every TF user in this project remaps `/tf → tf` and `/tf_static → tf_static`, which resolve to `/<ns>/tf` and `/<ns>/tf_static`. That covers `robot_state_publisher`, the Gazebo bridge, Nav2 and RViz. Any tool you add needs the same remapping (section 9.4).
 
-🔧 Lower real_time_update_rate and higher max_step_size lead to fewer simulation steps per second, improving runtime performance.
+---
 
-### 3. Reduce Topic Frequency
-Consider modifying the robot model or relevant plugins to reduce the frequency of published topics (e.g., /odom, /tf, /scan) if they are not critical at high rates.
+## 13. Optional: running with the TwinSight robot_adapter
 
-# FAQ
-**Why are /tf and /tf_static explicitly remapped in RViz and other nodes, even when a namespace is applied?**
+> This section is for teams that have access to the TwinSight `robot_adapter` repository. **Everything above works without it.**
 
-Although nodes like rviz2 can be launched with a specific namespace, the TransformListener in tf2_ros subscribes to the global topics /tf and /tf_static by default. This behavior stems from how the listener is implemented internally — the topic names are hardcoded with a leading slash, making them absolute paths (refer to /opt/ros/jazzy/include/tf2_ros/transform_listener.h for reference).
+`robot_adapter` sends each robot's telemetry (odometry, IMU, battery) to a TwinSight backend. When it is enabled, `tb3_world.launch.py` starts one `adapter_node` in each robot's namespace. It subscribes to `/<ns>/odom`, `/<ns>/imu` and `/<ns>/battery_state`.
 
-This can be quickly verified using the following command:
+### 13.1 Get the code
 
-```
-rviz2 --ros-args -r __ns:=/tb1
+Clone `robot_adapter` next to this repository:
+
+```bash
+cd ~/multirobot_ws/src
+git clone https://github.com/TwinSight-AI/robot_adapter.git -b develop
 ```
 
-Despite the namespace, the resulting RViz instance still subscribes to /tf and /tf_static globally.
-
-In a multi-robot configuration, where each robot is designed to operate with an isolated TF tree, remapping /tf to tf (a relative topic) ensures proper namespacing. This approach prevents conflicts and guarantees that TF messages remain within the intended robot scope.
-
-Such remapping is also necessary in other components (e.g., Nav2) that instantiate their own transform listeners. Applying consistent remapping avoids unintended cross-robot data mixing and supports clean separation of transform data across all robot instances.
-
-# 📎 Note on Included Files
-
-Some of configuration and model files (e.g., from turtlebot3 and nav2) have been directly copied into this repository. These were modified to better suit the multi-robot simulation and to ensure long-term consistency and reproducibility—even if the original upstream repositories evolve or change in the future. All original credit for these files remains with their respective authors and maintainers.
-
-# 🐳 Docker Compose Pipeline
-
-`docker/docker-compose.yaml` runs the full multi-robot stack as two containers built from the same image:
-
-- **tb3-world** — launches `tb3_world.launch.py` (Gazebo + per-robot robot_state_publisher, spawner, ros_gz_bridge, and the `robot_adapter` node).
-- **tb3-nav2** — launches `tb3_nav2.launch.py` (per-robot Nav2 bringup + RViz), started after `tb3-world`.
-
-Both containers run the exact same launch files used outside Docker, so the robot list, namespacing, and adapter wiring all come from [`config/robots.yaml`](config/robots.yaml) — enable/disable robots there and both containers pick it up automatically, with no per-robot changes needed in the compose file itself. AMCL initial poses are seeded automatically from the same file (see "Set Initial Pose" above), so no separate pose-publishing container is required.
-
-To run:
-
 ```
-cd docker && docker-compose up --build
+~/multirobot_ws/src/
+├── tb3_multi_robot/
+└── robot_adapter/
 ```
 
-### Inspecting topics
+### 13.2 TwinSight connection settings
 
-With the stack running, list the ROS topics available from either container:
+`tb3_world.launch.py` reads these environment variables when it starts:
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `TWINSIGHT_API_BASE_URL` | TwinSight backend URL, shared by all robots | `http://localhost:8001` |
+| `<NAME>_ROBOT_ID` | Robot UUID issued by TwinSight, one per robot (`TB1_ROBOT_ID`, `TB2_ROBOT_ID`, …) | empty |
+| `<NAME>_ROBOT_SECRET` | Matching robot secret (`TB1_ROBOT_SECRET`, …) | empty |
+
+`<NAME>` is the robot's `name` from `robots.yaml`, in upper case. Create each robot in the TwinSight platform first, then copy its ID and secret.
+
+If no backend is reachable, the simulation and Nav2 still work. The adapters only log connection errors.
+
+### 13.3 Native
+
+Build as in section 7.3. `rosdep` and `colcon` pick up `robot_adapter` automatically. Then start the world with the adapter turned on:
+
+```bash
+export TWINSIGHT_API_BASE_URL=http://localhost:8001
+export TB1_ROBOT_ID=<uuid>  TB1_ROBOT_SECRET=<secret>
+export TB2_ROBOT_ID=<uuid>  TB2_ROBOT_SECRET=<secret>
+# ...one pair per enabled robot
+
+ros2 launch tb3_multi_robot tb3_world.launch.py use_robot_adapter:=true
+```
+
+Start `tb3_nav2.launch.py` as usual. It also provides the battery data the adapter reads.
+
+### 13.4 Docker Compose
+
+1. Create `docker/.env`:
+
+   ```bash
+   cd ~/multirobot_ws/src/tb3_multi_robot/docker
+   cat > .env <<'EOF'
+   # A backend running on the host is reachable as host.docker.internal
+   # ("localhost" inside the container is the container itself).
+   TWINSIGHT_API_BASE_URL=http://host.docker.internal:8001
+   TB1_ROBOT_ID=
+   TB1_ROBOT_SECRET=
+   TB2_ROBOT_ID=
+   TB2_ROBOT_SECRET=
+   TB3_ROBOT_ID=
+   TB3_ROBOT_SECRET=
+   TB4_ROBOT_ID=
+   TB4_ROBOT_SECRET=
+   EOF
+   ```
+
+2. Start with the override file:
+
+   ```bash
+   docker compose -f docker-compose.yaml -f docker-compose.robot-adapter.yaml up --build
+   ```
+
+The override needs Docker Compose 2.17 or later. It does three things:
+
+- passes `../../robot_adapter` as an extra build context, so `robot_adapter` is built into the image
+- loads `.env` and adds the `host.docker.internal` host entry
+- launches the world with `use_robot_adapter:=true`
+
+With plain `docker build`, the equivalent is:
+
+```bash
+cd ~/multirobot_ws/src/tb3_multi_robot
+docker build -t tb3_multi_robot:latest -f docker/Dockerfile \
+  --build-context robot_adapter=../robot_adapter .
+```
+
+### 13.5 Troubleshooting
+
+| Symptom | Likely cause / fix |
+|---|---|
+| `package 'robot_adapter' not found` | `use_robot_adapter:=true` is set, but `robot_adapter` is not in the workspace or not built (13.1). |
+| Adapter logs `Connection refused` | No backend is listening at `TWINSIGHT_API_BASE_URL`. In Docker, use `http://host.docker.internal:<port>`, not `localhost`. |
+| `docker compose` fails with `env file ... .env not found` | Create `docker/.env` (13.4). |
+| `additional_contexts` is rejected | Your Docker Compose is older than 2.17. Update it, or build with `docker build --build-context ...` as shown above. |
+
+---
+
+## 14. Credits
+
+Based on [arshadlab/tb3_multi_robot](https://github.com/arshadlab/tb3_multi_robot) by Arshad Mehmood. Some configuration and model files come from the TurtleBot3 and Nav2 projects and were adapted for multi-robot use. Credit for those files remains with their original authors and maintainers.
+
+---
+
+## Appendix: topics per robot with the Nav2 backend
+
+These are the topics for one robot (`tb1`) while `tb3_world.launch.py` **and** `tb3_nav2.launch.py` are running with the default `burger` model. Every other robot has the same set under its own namespace (`/tb2/...`, `/tb3/...`). To see the live list:
+
+```bash
+ros2 topic list -t | grep -E '^/tb1/'
+```
+
+### Sensors and base (Gazebo ↔ ROS bridge)
+
+| Topic | Type | Direction / source |
+|---|---|---|
+| `/tb1/scan` | `sensor_msgs/msg/LaserScan` | Gazebo → ROS (lidar) |
+| `/tb1/imu` | `sensor_msgs/msg/Imu` | Gazebo → ROS |
+| `/tb1/odom` | `nav_msgs/msg/Odometry` | Gazebo → ROS (diff-drive odometry) |
+| `/tb1/joint_states` | `sensor_msgs/msg/JointState` | Gazebo → ROS (wheel joints) |
+| `/tb1/cmd_vel` | `geometry_msgs/msg/TwistStamped` | ROS → Gazebo. **Final velocity command** to the robot, published by Nav2's collision monitor |
+| `/tb1/camera/image_raw` | `sensor_msgs/msg/Image` | Gazebo → ROS, **`waffle` only** |
+| `/tb1/camera/camera_info` | `sensor_msgs/msg/CameraInfo` | Gazebo → ROS, **`waffle` only** |
+
+### Robot description and TF
+
+| Topic | Type | Source |
+|---|---|---|
+| `/tb1/robot_description` | `std_msgs/msg/String` | `robot_state_publisher` |
+| `/tb1/tf` | `tf2_msgs/msg/TFMessage` | Gazebo bridge (`odom → base_footprint`), `robot_state_publisher` (robot links), AMCL (`map → odom`) |
+| `/tb1/tf_static` | `tf2_msgs/msg/TFMessage` | `robot_state_publisher` |
+
+### Battery
+
+| Topic | Type | Notes |
+|---|---|---|
+| `/tb1/battery_state` | `sensor_msgs/msg/BatteryState` | `mock_battery` at 1 Hz. Slowly drains from 100 % to 20 %, then resets |
+
+### Localization
+
+| Topic | Type | Notes |
+|---|---|---|
+| `/tb1/initialpose` | `geometry_msgs/msg/PoseWithCovarianceStamped` | Input to AMCL (RViz "2D Pose Estimate", or CLI) |
+| `/tb1/amcl_pose` | `geometry_msgs/msg/PoseWithCovarianceStamped` | Robot pose in `map` |
+| `/tb1/particle_cloud` | `nav2_msgs/msg/ParticleCloud` | AMCL particles |
+
+The map itself is on the **global** `/map` topic (see the last table).
+
+### Navigation: goals, plans and control
+
+| Topic | Type | Notes |
+|---|---|---|
+| `/tb1/goal_pose` | `geometry_msgs/msg/PoseStamped` | Publish a pose here to start navigation (BT navigator) |
+| `/tb1/plan` | `nav_msgs/msg/Path` | Global path from the planner server |
+| `/tb1/plan_smoothed` | `nav_msgs/msg/Path` | Smoother server output |
+| `/tb1/behavior_tree_log` | `nav2_msgs/msg/BehaviorTreeLog` | BT navigator state changes |
+| `/tb1/local_plan` | `nav_msgs/msg/Path` | DWB controller local trajectory |
+| `/tb1/received_global_plan` | `nav_msgs/msg/Path` | DWB debug |
+| `/tb1/transformed_global_plan` | `nav_msgs/msg/Path` | DWB debug |
+| `/tb1/marker` | `visualization_msgs/msg/MarkerArray` | DWB trajectory markers |
+| `/tb1/evaluation` | `dwb_msgs/msg/LocalPlanEvaluation` | DWB critic scores (`debug_trajectory_details: true`) |
+| `/tb1/cost_cloud` | `sensor_msgs/msg/PointCloud2` | DWB cost grid |
+| `/tb1/speed_limit` | `nav2_msgs/msg/SpeedLimit` | Input to the controller server |
+
+### Velocity pipeline
 
 ```
-docker exec tb3-world bash -c "source /opt/ros/jazzy/setup.bash && source /opt/ros2_ws/install/setup.bash && ros2 topic list"
+controller_server / behavior_server ─► /tb1/cmd_vel_nav ─► velocity_smoother ─► /tb1/cmd_vel_smoothed ─► collision_monitor ─► /tb1/cmd_vel ─► Gazebo
 ```
 
-### TwinSight backend URL and per-robot credentials (UUIDs)
+| Topic | Type | Notes |
+|---|---|---|
+| `/tb1/cmd_vel_nav` | `geometry_msgs/msg/TwistStamped` | Raw output of the controller and behaviors |
+| `/tb1/cmd_vel_smoothed` | `geometry_msgs/msg/TwistStamped` | After the velocity smoother |
+| `/tb1/cmd_vel_teleop` | `geometry_msgs/msg/TwistStamped` | Input for the `assisted_teleop` behavior |
+| `/tb1/preempt_teleop` | `std_msgs/msg/Empty` | Stops `assisted_teleop` |
+| `/tb1/collision_monitor_state` | `nav2_msgs/msg/CollisionMonitorState` | Collision-monitor action currently in effect |
+| `/tb1/polygon_stop` | `geometry_msgs/msg/PolygonStamped` | Stop zone (visualization) |
+| `/tb1/polygon_slowdown` | `geometry_msgs/msg/PolygonStamped` | Slow-down zone (visualization) |
 
-Each robot's `robot_adapter` node needs its own `robot_id` (UUID) and `robot_secret` to register as a distinct entity in the TwinSight platform. `tb3_world.launch.py` reads these per robot from `<ROBOT_NAME>_ROBOT_ID` / `<ROBOT_NAME>_ROBOT_SECRET` environment variables (e.g. `TB1_ROBOT_ID`, `TB3_ROBOT_SECRET`), which `docker-compose.yaml` passes through for `tb1`–`tb4`. The API endpoint itself is shared by all robots and configured via `TWINSIGHT_API_BASE_URL`.
+### Costmaps
 
-Set these in a `docker/.env` file (or export in the shell) before `docker compose up`:
+The same set of topics exists under `/tb1/local_costmap/` (a 3 × 3 m rolling window in `odom`) and under `/tb1/global_costmap/` (in `map`):
 
-```
-TWINSIGHT_API_BASE_URL=<your TwinSight backend URL>
-TB1_ROBOT_ID=<tb1 uuid>
-TB1_ROBOT_SECRET=<tb1 secret>
-TB3_ROBOT_ID=<tb3 uuid>
-TB3_ROBOT_SECRET=<tb3 secret>
-```
+| Topic (relative to `.../local_costmap/` or `.../global_costmap/`) | Type |
+|---|---|
+| `costmap` | `nav_msgs/msg/OccupancyGrid` |
+| `costmap_updates` | `map_msgs/msg/OccupancyGridUpdate` |
+| `costmap_raw` | `nav2_msgs/msg/Costmap` |
+| `published_footprint` | `geometry_msgs/msg/PolygonStamped` |
+| `footprint` | `geometry_msgs/msg/Polygon` (input) |
+| `voxel_grid` | `nav2_msgs/msg/VoxelGrid` (voxel layer) |
 
-`TWINSIGHT_API_BASE_URL` defaults to `http://localhost:8001`, which is **not** reachable from inside the `tb3-world` container unless a backend is actually listening there on the host/network — leaving it unset (with no backend running) will show up as `Connection refused` errors in the adapter's logs. Any robot left with no `_ROBOT_ID` falls back to the adapter's built-in dummy UUID (fine for local testing, but all such robots will share the same identity against the platform).
+### Docking (opennav_docking: configured, but the world has no physical dock)
+
+| Topic | Type |
+|---|---|
+| `/tb1/dock_pose` | `geometry_msgs/msg/PoseStamped` |
+| `/tb1/filtered_dock_pose` | `geometry_msgs/msg/PoseStamped` |
+| `/tb1/staging_pose` | `geometry_msgs/msg/PoseStamped` |
+
+### RViz tool topics
+
+| Topic | Type |
+|---|---|
+| `/tb1/clicked_point` | `geometry_msgs/msg/PointStamped` ("Publish Point" tool) |
+| `/tb1/waypoints` | `visualization_msgs/msg/MarkerArray` (Nav2 panel waypoint mode) |
+
+The RViz template also has displays for topics this setup never publishes, for example `downsampled_costmap`, `mobile_base/sensors/bumper_pointcloud`, `intel_realsense_r200_depth/*` and `*/voxel_marked_cloud`. These can appear in `ros2 topic list` with subscribers only.
+
+### Lifecycle and bonds
+
+| Topic | Type |
+|---|---|
+| `/tb1/<node>/transition_event` | `lifecycle_msgs/msg/TransitionEvent`. There is one per lifecycle node: `map_server`, `amcl`, `controller_server`, `local_costmap/local_costmap`, `global_costmap/global_costmap`, `smoother_server`, `planner_server`, `behavior_server`, `velocity_smoother`, `collision_monitor`, `bt_navigator`, `waypoint_follower`, `docking_server` |
+| `/tb1/bond` | `bond/msg/Status` (lifecycle manager heartbeats) |
+
+### Global topics shared by all robots
+
+| Topic | Type | Notes |
+|---|---|---|
+| `/clock` | `rosgraph_msgs/msg/Clock` | Simulation time, from a single bridge for the whole world |
+| `/map` | `nav_msgs/msg/OccupancyGrid` | Every robot's `map_server` publishes the same map here (`topic_name: /map`). Each robot's AMCL and global costmap subscribe to it |
+| `/parameter_events`, `/rosout` | standard | ROS 2 infrastructure |
+
+### Actions per robot
+
+`ros2 topic list` does not show these; use `ros2 action list`.
+
+| Action | Type |
+|---|---|
+| `/tb1/navigate_to_pose` | `nav2_msgs/action/NavigateToPose` |
+| `/tb1/navigate_through_poses` | `nav2_msgs/action/NavigateThroughPoses` |
+| `/tb1/follow_waypoints` | `nav2_msgs/action/FollowWaypoints` |
+| `/tb1/compute_path_to_pose` | `nav2_msgs/action/ComputePathToPose` |
+| `/tb1/compute_path_through_poses` | `nav2_msgs/action/ComputePathThroughPoses` |
+| `/tb1/follow_path` | `nav2_msgs/action/FollowPath` |
+| `/tb1/smooth_path` | `nav2_msgs/action/SmoothPath` |
+| `/tb1/spin`, `/tb1/backup`, `/tb1/drive_on_heading`, `/tb1/wait`, `/tb1/assisted_teleop` | `nav2_msgs/action/Spin`, `BackUp`, `DriveOnHeading`, `Wait`, `AssistedTeleop` |
+| `/tb1/dock_robot`, `/tb1/undock_robot` | `nav2_msgs/action/DockRobot`, `UndockRobot` |

@@ -1,27 +1,18 @@
+# Standalone multi-robot simulation (no TwinSight robot_adapter).
+#   cd docker && docker compose up --build
+# To also run the TwinSight robot_adapter, add the override file:
+#   docker compose -f docker-compose.yaml -f docker-compose.robot-adapter.yaml up --build
 services:
   tb3-world:
     build:
-      # Context is the workspace src/ dir so the Dockerfile can also COPY the
-      # sibling robot_adapter package and build it alongside tb3_multi_robot.
-      context: ../../
-      dockerfile: tb3_multi_robot/docker/Dockerfile
+      # Context is this repository's root; the image builds from it alone.
+      context: ..
+      dockerfile: docker/Dockerfile
     image: tb3_multi_robot:latest
     container_name: tb3-world
     user: "${UID:-1000}:${GID:-1000}"
     ipc: host
     gpus: all
-    extra_hosts:
-      # Lets TWINSIGHT_API_BASE_URL reach a backend published on the host
-      # (e.g. a sibling docker-compose stack's container) via its host port,
-      # since "localhost" inside this container is this container itself.
-      - "host.docker.internal:host-gateway"
-    env_file:
-      # Per-robot TwinSight platform credentials (UUID + secret) and the
-      # backend URL, read by tb3_world.launch.py for each robot's adapter
-      # node. Loaded explicitly so it applies regardless of the directory
-      # `docker compose` is invoked from; any var left unset here falls back
-      # to the adapter's built-in dummy UUID.
-      - .env
     environment:
       - DISPLAY=${DISPLAY}
       - ROS_DOMAIN_ID=0
