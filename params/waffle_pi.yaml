@@ -412,7 +412,10 @@ collision_monitor:
         theta_max: 1.0
     observation_sources: ["scan"]
     scan:
-      source_timeout: 0.2
+      # Max age of the latest scan before the collision monitor treats the
+      # source as invalid and stops the robot. The simulated lidar runs at
+      # 5 Hz (burger) / 10 Hz (waffle), so 0.2 s rejected almost every scan.
+      source_timeout: 1.0
       type: "scan"
       topic: "<robot_namespace>/scan"
       enabled: true
