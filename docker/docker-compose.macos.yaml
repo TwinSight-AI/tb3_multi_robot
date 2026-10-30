@@ -1,0 +1,26 @@
+# Display override for macOS (Docker Desktop or OrbStack) with XQuartz.
+# Containers on macOS get no GPU, so Gazebo and RViz render on the CPU
+# (Mesa llvmpipe) and send the result to XQuartz over TCP. Expect it to be
+# slow; enable only one or two robots in config/robots.yaml.
+#
+# One-time host setup:
+#   brew install --cask xquartz
+#   XQuartz > Settings > Security > "Allow connections from network clients"
+#   log out and back in (or reboot), then start XQuartz and run:
+#   xhost +localhost
+#
+#   docker compose -f docker-compose.yaml -f docker-compose.macos.yaml up --build
+services:
+  tb3-world:
+    environment:
+      - DISPLAY=host.docker.internal:0
+      - LIBGL_ALWAYS_SOFTWARE=1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  tb3-nav2:
+    environment:
+      - DISPLAY=host.docker.internal:0
+      - LIBGL_ALWAYS_SOFTWARE=1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

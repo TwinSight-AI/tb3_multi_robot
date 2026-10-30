@@ -1,0 +1,19 @@
+# Graphics override for Linux hosts with an NVIDIA GPU.
+# Requires the NVIDIA driver and the NVIDIA Container Toolkit on the host.
+#   docker compose -f docker-compose.yaml -f docker-compose.nvidia.yaml up --build
+services:
+  tb3-world:
+    gpus: all
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+    volumes:
+      - /dev/dri:/dev/dri
+
+  tb3-nav2:
+    gpus: all
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+    volumes:
+      - /dev/dri:/dev/dri

@@ -65,7 +65,8 @@ tb3_multi_robot/
 ├── twin_configs/tbX/            # per-robot map copies (not used by any launch file)
 └── docker/
     ├── Dockerfile
-    ├── docker-compose.yaml                  # standalone stack
+    ├── docker-compose.yaml                  # standalone stack (no GPU access)
+    ├── docker-compose.{nvidia,dri,macos}.yaml  # graphics override per host, see 6.2
     ├── docker-compose.robot-adapter.yaml    # optional override, see section 13
     └── entrypoint.sh
 ```
@@ -78,8 +79,8 @@ At launch time, the bridge YAML, Nav2 params and RViz config are generated for e
 
 | | **Docker Compose** (section 6) | **Native** (section 7) |
 |---|---|---|
-| Host OS | Any Linux with Docker and an X11 display | Ubuntu 24.04 with an X11 display |
-| GPU | NVIDIA GPU + NVIDIA Container Toolkit (the compose file requests `gpus: all`) | Any GPU that runs Gazebo Harmonic |
+| Host OS | Linux with Docker and an X11 display (recommended), or macOS with XQuartz (works, but slow) | Ubuntu 24.04 with an X11 display |
+| GPU | Optional. Pick the graphics override that matches your host (6.2) | Any GPU that runs Gazebo Harmonic |
 | ROS on host | Not needed | ROS 2 Jazzy |
 | Best for | Running the stack as-is | Developing and debugging nodes |
 
@@ -144,22 +145,67 @@ For a native run, set it in the shell before launching, for example `export TURT
 
 ### 6.1 Allow the containers to open windows
 
+On a Linux host:
+
 ```bash
 xhost +local:docker
 ```
 
-### 6.2 Build and start
+On macOS, see 6.4 instead.
+
+### 6.2 Pick the graphics override for your host
+
+`docker-compose.yaml` on its own gives the containers no GPU access, so it starts on any host. Gazebo and RViz then render on the CPU, which is slow. Add **one** override file that matches your machine:
+
+| Host | Override file | What it adds |
+|---|---|---|
+| Linux + NVIDIA GPU | `docker-compose.nvidia.yaml` | `gpus: all` and `/dev/dri`. Needs the NVIDIA driver and the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) |
+| Linux + Intel or AMD GPU | `docker-compose.dri.yaml` | Mounts `/dev/dri` (Mesa drivers) |
+| macOS (Docker Desktop or OrbStack) | `docker-compose.macos.yaml` | Display through XQuartz, CPU rendering (see 6.4) |
+| Anything else / no GPU | none | Nothing. CPU rendering |
+
+### 6.3 Build and start
 
 ```bash
 cd ~/multirobot_ws/src/tb3_multi_robot/docker
+
+# example for an NVIDIA machine; swap in the override from 6.2
+docker compose -f docker-compose.yaml -f docker-compose.nvidia.yaml up --build
+```
+
+To avoid repeating the `-f` flags, set `COMPOSE_FILE` once. Use the same file list for every `docker compose` command in this folder, including `down`:
+
+```bash
+export COMPOSE_FILE=docker-compose.yaml:docker-compose.nvidia.yaml
 docker compose up --build
 ```
 
 The image contains a copy of the repository, not your live files. Run `up --build` again after any change to `robots.yaml` or the code.
 
-To stop, press `Ctrl+C`, then run `docker compose down`.
+To stop, press `Ctrl+C`, then run `docker compose down` with the same `-f` flags.
 
-### 6.3 Open a shell in a running container
+### 6.4 macOS hosts
+
+Containers on macOS have no GPU access, so Gazebo and RViz render on the CPU and draw through XQuartz. It works, but it is slow. Enable only one or two robots in `robots.yaml` (section 5.1).
+
+One-time setup:
+
+1. Install XQuartz: `brew install --cask xquartz`.
+2. In **XQuartz → Settings → Security**, turn on **Allow connections from network clients**.
+3. Log out and back in, or reboot.
+
+Each session:
+
+```bash
+open -a XQuartz
+xhost +localhost
+cd ~/multirobot_ws/src/tb3_multi_robot/docker
+docker compose -f docker-compose.yaml -f docker-compose.macos.yaml up --build
+```
+
+The base image (`osrf/ros:jazzy-desktop-full`) may not have an arm64 build. If not, Apple Silicon Macs run it under x86 emulation, which slows it down even more. For anything beyond a quick look, use a Linux machine.
+
+### 6.5 Open a shell in a running container
 
 `docker exec` skips the entrypoint, so source the environment yourself:
 
@@ -262,7 +308,7 @@ Optional `tb3_nav2.launch.py` arguments: `map:=<path to map.yaml>`, `params_file
 
 ## 8. Check that it works
 
-Run these from a sourced terminal (native) or a container shell (section 6.3):
+Run these from a sourced terminal (native) or a container shell (section 6.5):
 
 ```bash
 ros2 topic list | grep '^/tb1/'            # per-robot topics (full list in the Appendix)
@@ -366,10 +412,12 @@ docker run -it --rm \
   --env DISPLAY=$DISPLAY \
   --env QT_X11_NO_MITSHM=1 \
   --volume /tmp/.X11-unix:/tmp/.X11-unix:rw \
-  --volume /dev/dri:/dev/dri \
+  --device /dev/dri \
   --volume $HOME/multirobot_ws:/robot_ws \
   tb3_multi_robot:dev bash
 ```
+
+This example is for a Linux host. On NVIDIA machines, also add `--gpus all`. On macOS, drop `--device /dev/dri` and use `--env DISPLAY=host.docker.internal:0 --env LIBGL_ALWAYS_SOFTWARE=1` (see 6.4).
 
 Inside the container:
 
@@ -395,8 +443,10 @@ Build output goes to `/robot_ws`, which is your workspace folder on the host.
 
 | Symptom | Likely cause / fix |
 |---|---|
-| `docker compose up` fails with a GPU / `nvidia` error | The compose file requests `gpus: all`. Install the NVIDIA Container Toolkit. On a machine without an NVIDIA GPU, delete the `gpus: all` line. |
-| No window appears from Docker | Run `xhost +local:docker` on the host and check that `DISPLAY` is set. |
+| `could not select device driver "" with capabilities: [[gpu]]` | You used `docker-compose.nvidia.yaml` on a host without the NVIDIA Container Toolkit (or on macOS). Use the override for your host (6.2), or install the toolkit. |
+| `/dev/dri` mount error | You used the `nvidia` or `dri` override on a host without `/dev/dri` (e.g. macOS). Use `docker-compose.macos.yaml` or no override. |
+| No window appears from Docker | Linux: run `xhost +local:docker` and check that `DISPLAY` is set. macOS: XQuartz must be running, allow network clients, and you must have run `xhost +localhost` (6.4). |
+| Gazebo or RViz is very slow, or windows are black | The container is rendering on the CPU. On Linux, add the matching graphics override (6.2). On macOS this is expected; enable fewer robots. |
 | A robot does not localize, or drifts right after start | Its `yaw` in `robots.yaml` is not 0 (section 5.1), or it was moved. Re-localize it (9.2). |
 | Nav2 nodes fail to start, or discovery is flaky with many robots | You are hitting the DDS participant limit. Set `RMW_IMPLEMENTATION` and `CYCLONEDDS_URI` (7.2). |
 | Gazebo hangs on the first start | It is downloading models from Gazebo Fuel. Check your internet access. |
@@ -493,10 +543,11 @@ Start `tb3_nav2.launch.py` as usual. It also provides the battery data the adapt
    EOF
    ```
 
-2. Start with the override file:
+2. Start with the robot_adapter override, plus your graphics override from 6.2:
 
    ```bash
-   docker compose -f docker-compose.yaml -f docker-compose.robot-adapter.yaml up --build
+   docker compose -f docker-compose.yaml -f docker-compose.nvidia.yaml \
+     -f docker-compose.robot-adapter.yaml up --build
    ```
 
 The override needs Docker Compose 2.17 or later. It does three things:

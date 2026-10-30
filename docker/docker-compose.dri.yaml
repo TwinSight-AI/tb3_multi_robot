@@ -1,0 +1,10 @@
+# Graphics override for Linux hosts with an Intel or AMD GPU (Mesa drivers).
+#   docker compose -f docker-compose.yaml -f docker-compose.dri.yaml up --build
+services:
+  tb3-world:
+    volumes:
+      - /dev/dri:/dev/dri
+
+  tb3-nav2:
+    volumes:
+      - /dev/dri:/dev/dri
